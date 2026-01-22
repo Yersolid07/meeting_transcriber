@@ -1,0 +1,64 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data and models (large files)
+models/
+data/audio/
+data/output/
+cache/
+logs/
+dataset_mentah/
+
+# Keep directory structure
+!data/audio/.gitkeep
+!data/output/.gitkeep
+!data/ground_truth/.gitkeep
+!models/.gitkeep
+!cache/.gitkeep
+!logs/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# ML artifacts
+experiments/
+data/output_smoke/
+*.pt
+*.ckpt
+
+
+# Streamlit
+.streamlit/

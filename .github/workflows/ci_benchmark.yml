@@ -1,0 +1,38 @@
+name: CI - Tests + Benchmark
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  test-and-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Run synthetic benchmark
+        run: |
+          mkdir -p results
+          python scripts/benchmark_asr.py --synthetic --json-output results/benchmark_synthetic.json | tee results/benchmark_synthetic.log
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-synthetic
+          path: |
+            results/benchmark_synthetic.json
+            results/benchmark_synthetic.log

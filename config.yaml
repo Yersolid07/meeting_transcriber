@@ -1,0 +1,209 @@
+# =============================================================================
+# CONFIG.YAML - Konfigurasi Sistem Notulensi Rapat Otomatis
+# =============================================================================
+
+# Informasi Proyek
+project:
+  name: "Meeting Transcriber"
+  version: "1.0.0"
+  author: "Nama Mahasiswa"
+  description: "Sistem Notulensi Rapat Otomatis berbasis SpeechBrain dan BERT"
+
+# Konfigurasi Audio
+audio:
+  sample_rate: 16000
+  mono: true
+  normalize: true
+  trim_silence: false
+  max_duration_minutes: 60
+
+# Konfigurasi Speaker Diarization
+diarization:
+  # Voice Activity Detection
+  vad:
+    threshold: 0.5
+    min_speech_duration: 0.3
+    min_silence_duration: 0.3
+    speech_pad_ms: 30
+
+  # Segmentation
+  segmentation:
+    window_duration: 1.5
+    window_hop: 0.75
+    min_segment_duration: 0.5
+
+  # Speaker Embedding
+  embedding:
+    model_id: "speechbrain/spkrec-ecapa-voxceleb"
+    embedding_dim: 192
+
+  # Clustering
+  clustering:
+    method: "spectral"  # agglomerative, spectral, kmeans
+    threshold: 0.7
+    min_cluster_size: 2
+    linkage: "average"
+
+  # Post-processing
+  postprocessing:
+    merge_gap_threshold: 0.5
+    min_segment_duration: 0.3
+    smooth_segments: true
+
+# Konfigurasi ASR (Speech Recognition)
+asr:
+  model_id: "whisper/whisper-base"
+  # model_id: "indonesian-nlp/wav2vec2-large-xlsr-indonesian"
+  # Alternatif: "facebook/wav2vec2-large-xlsr-53"
+  chunk_length_s: 30
+  stride_length_s: 5
+  batch_size: 4
+  return_timestamps: false
+  backend: "transformers"  # options: 'transformers'|'whisper'|'speechbrain'
+
+  # Post-processing teks
+  text_postprocessing:
+    capitalize_sentences: true
+    normalize_whitespace: true
+    add_punctuation: false  # Bisa diaktifkan jika ada model punctuation
+
+# Konfigurasi BERT Summarization
+summarization:
+  # Model
+  model_id: "indobenchmark/indobert-base-p1"
+  sentence_model_id: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+  # Extractive Summarization Settings
+  extractive:
+    num_sentences: 5
+    min_sentence_length: 10
+    max_sentence_length: 200
+    position_weight: 0.1
+    similarity_threshold: 0.3
+
+  # Keyword Detection
+  keywords:
+    decisions:
+      - "diputuskan"
+      - "disepakati"
+      - "kesimpulan"
+      - "keputusan"
+      - "jadi"
+      - "maka"
+      - "sepakat"
+      - "setuju"
+      - "final"
+      - "kesepakatan"
+
+    action_items:
+      - "akan"
+      - "harus"
+      - "perlu"
+      - "tolong"
+      - "mohon"
+      - "deadline"
+      - "target"
+      - "tugas"
+      - "tanggung jawab"
+      - "action item"
+      - "follow up"
+      - "tindak lanjut"
+      - "dikerjakan"
+      - "selesaikan"
+
+# Konfigurasi Document Generation
+document:
+  template: "default"
+
+  # Struktur dokumen
+  sections:
+    header: true
+    meeting_info: true
+    summary: true
+    decisions: true
+    action_items: true
+    transcript: true
+    footer: true
+
+  # Formatting
+  formatting:
+    title_font_size: 18
+    heading_font_size: 14
+    body_font_size: 11
+    font_family: "Calibri"
+    include_timestamps: true
+    include_speaker_colors: true
+
+  # Output
+  output:
+    directory: "./data/output"
+    filename_template: "notulensi_{title}_{date}_{timestamp}"
+
+# Konfigurasi Evaluasi
+evaluation:
+  # WER Settings
+  wer:
+    lowercase: true
+    remove_punctuation: true
+    normalize_whitespace: true
+
+  # DER Settings
+  der:
+    collar: 0.25  # Forgiveness collar in seconds
+    skip_overlap: false
+
+  # Output
+  output:
+    save_detailed_results: true
+    generate_plots: true
+    export_csv: true
+
+# Konfigurasi Hardware
+hardware:
+  device: "auto"  # auto, cuda, cpu
+  num_workers: 4
+  pin_memory: true
+
+  # Memory management
+  max_batch_size: 8
+  gradient_checkpointing: false
+
+# Konfigurasi Paths
+paths:
+  models_dir: "./models"
+  audio_dir: "./data/audio"
+  ground_truth_dir: "./data/ground_truth"
+  output_dir: "./data/output"
+  cache_dir: "./cache"
+  logs_dir: "./logs"
+
+# Konfigurasi Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  save_to_file: true
+  log_file: "./logs/pipeline.log"
+
+# Eksperimen (untuk skripsi)
+experiment:
+  name: "baseline_evaluation"
+  conditions:
+    - name: "bersih"
+      description: "Audio bersih, ruangan tenang"
+      expected_wer: 0.15
+      expected_der: 0.15
+
+    - name: "noisy"
+      description: "Audio dengan background noise"
+      expected_wer: 0.25
+      expected_der: 0.25
+
+    - name: "overlap"
+      description: "Audio dengan overlapping speech"
+      expected_wer: 0.35
+      expected_der: 0.40
+
+    - name: "multispeaker"
+      description: "Audio dengan 4-6 speaker"
+      expected_wer: 0.25
+      expected_der: 0.35

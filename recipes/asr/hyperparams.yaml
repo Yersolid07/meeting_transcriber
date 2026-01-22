@@ -1,0 +1,53 @@
+# Minimal hyperparams for finetuning ASR (SpeechBrain-style / HyperPyYAML)
+# Use this as a starting point for fine-tuning Wav2Vec2/Whisper models on meeting data.
+
+seed: 20260114
+__set_seed: !apply:speechbrain.utils.seed_everything [!ref <seed>]
+
+# Data / manifests (created with scripts/create_manifest.py)
+train_annotation: ../../data/manifests/train.json
+valid_annotation: ../../data/manifests/dev.json
+test_annotation: ../../data/manifests/test.json
+
+# Output
+output_folder: !ref results/asr_finetune_<seed>
+save_folder: !ref <output_folder>/save
+train_log: !ref <output_folder>/train_log.txt
+
+# Training
+number_of_epochs: 10
+batch_size: 8
+lr: 3e-5
+weight_decay: 0.01
+warmup_steps: 500
+scheduler: linear
+optimizer: AdamW
+
+# Optional speaker head (for improving speaker differentiation / multi-task training)
+# If `use_speaker_head` is true and manifests include a `speaker` field, a speaker-classifier head
+# will be added and trained jointly with the ASR objective (weighted by speaker_loss_weight).
+use_speaker_head: False
+speaker_loss_weight: 1.0
+speaker_classes: null  # inferred from train manifest if null
+
+# Experiment outputs
+experiment_outdir: ../../experiments
+save_metrics: True
+
+# Data / feature
+sample_rate: 16000
+chunk_length_s: 30
+stride_length_s: 5
+
+# Augmentation (simple defaults)
+enable_add_noise: True
+enable_speed_perturb: True
+speed_changes: [95, 100, 105]
+
+# Validation
+validation_interval: 1
+save_best_metric: wer
+
+# Notes:
+# - This file is intentionally minimal. Use SpeechBrain templates for more complex recipes.
+# - To run with SpeechBrain: `python recipes/asr/train.py recipes/asr/hyperparams.yaml`
