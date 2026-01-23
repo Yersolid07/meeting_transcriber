@@ -16,7 +16,7 @@ Sistem end-to-end untuk mengubah rekaman audio rapat menjadi dokumen notulensi t
 
 ```bash
 # Clone repository
-git clone https://github.com/username/meeting-transcriber.git
+git clone https://github.com/Yersolid07/meeting_transcriber.git
 cd meeting-transcriber
 
 # Install dependencies
