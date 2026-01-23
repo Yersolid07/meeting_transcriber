@@ -96,7 +96,7 @@ Untuk dokumentasi lengkap, lihat README.md
         "--speaker-map",
         type=str,
         default=None,
-        help="Path ke JSON/YAML file yang memetakan speaker label (SPEAKER_00) ke nama (mis: {\"SPEAKER_00\": \"Budi\"})",
+        help='Path ke JSON/YAML file yang memetakan speaker label (SPEAKER_00) ke nama (mis: {"SPEAKER_00": "Budi"})',
     )
 
     meta_group.add_argument(
@@ -205,7 +205,7 @@ Untuk dokumentasi lengkap, lihat README.md
         "--whisperx-compute-type",
         type=str,
         default="auto",
-        help='WhisperX compute_type (auto|float16|int8|int8_float16). Default auto.',
+        help="WhisperX compute_type (auto|float16|int8|int8_float16). Default auto.",
     )
     model_group.add_argument(
         "--whisperx-no-vad-filter",

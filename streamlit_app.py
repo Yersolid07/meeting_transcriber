@@ -6,11 +6,12 @@ import streamlit as st
 
 from src.pipeline import MeetingTranscriberPipeline, PipelineConfig
 
-
 st.set_page_config(page_title="Meeting Transcriber", layout="wide")
 
 st.title("Meeting Transcriber — Demo")
-st.markdown("Upload an audio file or pick a sample to generate transcript, summary and downloadable DOCX.")
+st.markdown(
+    "Upload an audio file or pick a sample to generate transcript, summary and downloadable DOCX."
+)
 
 # Sample audio chooser
 AUDIO_DIR = Path.cwd() / "data" / "audio"
@@ -33,11 +34,17 @@ with st.sidebar:
     if deploy_target.lower() == "community":
         default_index = 2  # 'fast'
         default_quick_asr = True
-        st.info("Running in Streamlit Community mode: using fast preset and quick ASR for responsiveness.")
+        st.info(
+            "Running in Streamlit Community mode: using fast preset and quick ASR for responsiveness."
+        )
 
-    preset = st.selectbox("Preset", ["deployment", "balanced", "fast", "accurate"], index=default_index)
+    preset = st.selectbox(
+        "Preset", ["deployment", "balanced", "fast", "accurate"], index=default_index
+    )
     quick_asr = st.checkbox("Quick ASR (override)", value=default_quick_asr)
-    parallel_workers = st.number_input("Parallel workers (0 = auto)", min_value=0, max_value=16, value=0)
+    parallel_workers = st.number_input(
+        "Parallel workers (0 = auto)", min_value=0, max_value=16, value=0
+    )
     sample_choice = st.selectbox("Pick sample audio (optional)", ["None"] + SAMPLES)
 
 uploaded_file = st.file_uploader("Upload audio (.wav, .mp3, .m4a)")
@@ -60,7 +67,15 @@ if not audio_path:
 # Clear existing session state if user changed audio selection
 if "diarization_done" in st.session_state and st.session_state.get("audio_path") != audio_path:
     # Keep only unrelated session keys
-    for k in ["diarization_done", "pipeline", "dz_res", "sample_segments", "snippet_transcripts", "result", "mapping"]:
+    for k in [
+        "diarization_done",
+        "pipeline",
+        "dz_res",
+        "sample_segments",
+        "snippet_transcripts",
+        "result",
+        "mapping",
+    ]:
         if k in st.session_state:
             del st.session_state[k]
 
@@ -92,7 +107,9 @@ if st.session_state.get("diarization_done") and audio_path:
     pipeline = st.session_state["pipeline"]
     dz_res = st.session_state["dz_res"]
 
-    st.write(f"Detected {len(dz_res['unique_speakers'])} speakers and {dz_res['num_segments']} segments")
+    st.write(
+        f"Detected {len(dz_res['unique_speakers'])} speakers and {dz_res['num_segments']} segments"
+    )
 
     # Playable sample and quick per-speaker snippets so user can listen/read before mapping
     st.subheader("Sample snippets (listen + read before mapping)")
@@ -148,8 +165,9 @@ if st.session_state.get("diarization_done") and audio_path:
             st.warning(f"Quick snippet transcription failed: {e}")
 
     # Display snippets in columns with audio player + short transcript
-    import soundfile as sf
     import tempfile
+
+    import soundfile as sf
 
     mapping = st.session_state.get("mapping") or {}
     st.subheader("Manual speaker mapping")
@@ -164,7 +182,9 @@ if st.session_state.get("diarization_done") and audio_path:
                         sr = pipeline._sample_rate
                         start_sample = int(seg.start * sr)
                         end_sample = int(seg.end * sr)
-                        audio_np = pipeline._waveform[:, start_sample:end_sample].squeeze().cpu().numpy()
+                        audio_np = (
+                            pipeline._waveform[:, start_sample:end_sample].squeeze().cpu().numpy()
+                        )
                         tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                         sf.write(tmpf.name, audio_np, sr)
                         st.audio(tmpf.name)
@@ -206,22 +226,34 @@ if st.session_state.get("diarization_done") and audio_path:
         if res.document_path and os.path.exists(res.document_path):
             with open(res.document_path, "rb") as fh:
                 doc_bytes = fh.read()
-            st.download_button("Download .docx", data=doc_bytes, file_name=Path(res.document_path).name)
+            st.download_button(
+                "Download .docx", data=doc_bytes, file_name=Path(res.document_path).name
+            )
 
         st.write("---")
         st.write("Processing metadata:")
-        st.write({
-            "Audio duration": res.audio_duration,
-            "Speakers found": res.num_speakers,
-            "Segments": res.num_segments,
-            "Total words": res.total_words,
-            "Processing time (s)": res.processing_time,
-        })
+        st.write(
+            {
+                "Audio duration": res.audio_duration,
+                "Speakers found": res.num_speakers,
+                "Segments": res.num_segments,
+                "Total words": res.total_words,
+                "Processing time (s)": res.processing_time,
+            }
+        )
 
         st.balloons()
 
     # Allow clearing state
     if st.button("Clear diarization state"):
-        for k in ["diarization_done", "pipeline", "dz_res", "sample_segments", "snippet_transcripts", "result", "mapping"]:
+        for k in [
+            "diarization_done",
+            "pipeline",
+            "dz_res",
+            "sample_segments",
+            "snippet_transcripts",
+            "result",
+            "mapping",
+        ]:
             if k in st.session_state:
                 del st.session_state[k]

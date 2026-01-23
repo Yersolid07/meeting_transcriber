@@ -399,6 +399,116 @@ def parse_rttm_file(filepath: Union[str, Path]) -> List[tuple]:
     return segments
 
 
+# -----------------------------------------------------------------------------
+# Helpers for building RTTM from speaker-labeled transcripts
+# -----------------------------------------------------------------------------
+
+
+def parse_speaker_labeled_text(text: str) -> List[Tuple[str, str]]:
+    """Parse speaker-labeled transcript text into a list of (speaker, text).
+
+    Recognizes lines that start with `Name:` (case-insensitive) as speaker labels.
+    Consecutive non-label lines are appended to the current speaker utterance.
+
+    Returns empty list if input is empty.
+    """
+    label_re = re.compile(r"^\s*([^:\n\r]{1,80}):\s*(.*)$")
+
+    items: List[Tuple[str, str]] = []
+
+    cur_speaker = None
+    cur_lines: List[str] = []
+
+    for raw in text.splitlines():
+        line = raw.rstrip("\n\r")
+        m = label_re.match(line)
+        if m:
+            if cur_speaker is not None:
+                items.append((cur_speaker, " ".join(l.strip() for l in cur_lines if l.strip())))
+            cur_speaker = m.group(1).strip()
+            first = m.group(2).strip()
+            cur_lines = [first] if first else []
+        else:
+            if line.strip():
+                cur_lines.append(line.strip())
+
+    if cur_speaker is not None:
+        items.append((cur_speaker, " ".join(l.strip() for l in cur_lines if l.strip())))
+
+    return items
+
+
+def align_reference_to_segments(
+    utterances: List[Tuple[str, str]],
+    hyp_segments: List[object],
+    min_score: float = 0.20,
+) -> List[Tuple[str, float, float]]:
+    """Align reference speaker utterances to hypothesis transcript segments.
+
+    Strategy (simple heuristic):
+      - Iterate utterances in order and try to find the best contiguous window of
+        hypothesis segments (starting from last matched index) whose combined
+        words have maximal overlap with the reference utterance words.
+      - Overlap score = intersection_words / reference_word_count.
+      - Accept match if score >= min_score; assign start/end from matched segments.
+
+    Returns list of (speaker_id, start, end).
+    """
+    if not utterances or not hyp_segments:
+        return []
+
+    # Precompute normalized words for hypothesis segments
+    hyp_words = []
+    for seg in hyp_segments:
+        txt = getattr(seg, "text", "") or ""
+        words = [w.lower() for w in re.findall(r"\w+", txt)]
+        hyp_words.append(words)
+
+    results: List[Tuple[str, float, float]] = []
+    cur_idx = 0
+
+    for speaker, ref_text in utterances:
+        ref_tokens = [w.lower() for w in re.findall(r"\w+", ref_text)]
+        if not ref_tokens:
+            continue
+        ref_set = set(ref_tokens)
+
+        best_score = 0.0
+        best_j = None
+        best_k = None
+
+        # Search windows starting at cur_idx
+        for j in range(cur_idx, len(hyp_segments)):
+            combined = []
+            for k in range(j, len(hyp_segments)):
+                combined.extend(hyp_words[k])
+                if not combined:
+                    continue
+                comb_set = set(combined)
+                score = len(ref_set & comb_set) / max(1, len(ref_set))
+
+                if score > best_score:
+                    best_score = score
+                    best_j = j
+                    best_k = k
+
+                # early break if we reach high confidence
+                if score >= 0.75:
+                    break
+
+        if best_j is not None and best_score >= min_score:
+            start = float(getattr(hyp_segments[best_j], "start", 0.0))
+            end = float(getattr(hyp_segments[best_k], "end", start))
+            spk = re.sub(r"[^0-9A-Za-z_\-]", "_", speaker)
+            results.append((spk, start, end))
+            cur_idx = best_k + 1
+        else:
+            # If no match found, skip (could be silence/non-speech)
+            continue
+
+    return results
+
+
 def create_ground_truth_template(
     output_path: Union[str, Path], audio_duration: float, num_speakers: int = 2
 ):

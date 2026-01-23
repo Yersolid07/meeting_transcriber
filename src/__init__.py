@@ -24,8 +24,8 @@ Example:
 """
 
 __version__ = "1.0.0"
-__author__ = "Nama Mahasiswa"
-__email__ = "email@university.ac.id"
+__author__ = "Yermia Turangan"
+__email__ = "yermiaturangan026@student.unsrat.ac.id"
 
 from src.audio_processor import AudioConfig, AudioProcessor
 from src.config import Config, load_config

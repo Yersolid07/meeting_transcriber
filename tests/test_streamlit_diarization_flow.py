@@ -1,6 +1,8 @@
 import os
 import tempfile
+
 import torch
+
 from src.pipeline import MeetingTranscriberPipeline, PipelineConfig
 
 
@@ -19,13 +21,19 @@ class DummyDiarizer:
         from src.diarization import SpeakerSegment
 
         return [
-            SpeakerSegment(speaker_id="SPEAKER_00", start=0.0, end=0.5, confidence=1.0, is_overlap=False),
-            SpeakerSegment(speaker_id="SPEAKER_01", start=0.5, end=1.0, confidence=1.0, is_overlap=False),
+            SpeakerSegment(
+                speaker_id="SPEAKER_00", start=0.0, end=0.5, confidence=1.0, is_overlap=False
+            ),
+            SpeakerSegment(
+                speaker_id="SPEAKER_01", start=0.5, end=1.0, confidence=1.0, is_overlap=False
+            ),
         ]
 
 
 def test_diarization_mapping_flow(tmp_path, monkeypatch):
-    cfg = PipelineConfig(models_dir=str(tmp_path), output_dir=str(tmp_path), save_intermediate=False)
+    cfg = PipelineConfig(
+        models_dir=str(tmp_path), output_dir=str(tmp_path), save_intermediate=False
+    )
     pipeline = MeetingTranscriberPipeline(cfg)
 
     # Patch processors
@@ -43,14 +51,18 @@ def test_diarization_mapping_flow(tmp_path, monkeypatch):
     # Ensure diarization segments were updated
     assert [s.speaker_id for s in pipeline._diarization_segments] == ["Budi", "Ani"]
 
-
     # Continue processing (stub transcriber to avoid heavy work)
     class DummyTranscriber:
         def transcribe_segments(self, waveform, segments, sample_rate=16000):
             from src.transcriber import TranscriptSegment
 
             return [
-                TranscriptSegment(speaker_id=s.speaker_id, start=s.start, end=s.end, text=("hello" if s.speaker_id == "Budi" else "hi"))
+                TranscriptSegment(
+                    speaker_id=s.speaker_id,
+                    start=s.start,
+                    end=s.end,
+                    text=("hello" if s.speaker_id == "Budi" else "hi"),
+                )
                 for s in segments
             ]
 

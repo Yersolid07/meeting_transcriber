@@ -15,12 +15,14 @@ from typing import Any, Dict, List, Optional
 try:
     import spacy
     from spacy.language import Language
+
     _HAS_SPACY = True
 except Exception:
     _HAS_SPACY = False
 
 try:
     from langdetect import detect as _detect_lang
+
     _HAS_LANGDETECT = True
 except Exception:
     _HAS_LANGDETECT = False
@@ -102,7 +104,9 @@ class AdvancedNLPExtractor:
         # preserve order, unique
         return list(dict.fromkeys(persons))
 
-    def extract_actions_from_sentences(self, sent_meta: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def extract_actions_from_sentences(
+        self, sent_meta: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """Return candidate action items extracted from sentence metadata.
 
         Each returned dict contains: {owner, task, sentence_idx, confidence}
@@ -119,9 +123,17 @@ class AdvancedNLPExtractor:
                 continue
 
             # Quick keyword filter (language-agnostic): if no action words, skip
-            if not re.search(r"\b(akan|harus|perlu|tolong|mohon|harap|deadline|target|tugas|follow up|tindak lanjut|siapkan|buat|bikin|saya|aku|kami|kita)\b", text, flags=re.IGNORECASE):
+            if not re.search(
+                r"\b(akan|harus|perlu|tolong|mohon|harap|deadline|target|tugas|follow up|tindak lanjut|siapkan|buat|bikin|saya|aku|kami|kita)\b",
+                text,
+                flags=re.IGNORECASE,
+            ):
                 # also check for English keywords
-                if not re.search(r"\b(will|shall|must|please|assign|task|deadline|action item|follow up|todo)\b", text, flags=re.IGNORECASE):
+                if not re.search(
+                    r"\b(will|shall|must|please|assign|task|deadline|action item|follow up|todo)\b",
+                    text,
+                    flags=re.IGNORECASE,
+                ):
                     continue
 
             doc = self._get_doc(text)
@@ -167,7 +179,11 @@ class AdvancedNLPExtractor:
 
             # Regex fallback to capture "Name akan <action>" in many languages
             if owner is None:
-                m = re.search(r"\b([A-Z][a-z]{1,20})\b\s+(akan|will|harus|must|to)\s+(?P<task>.+)", text, flags=re.IGNORECASE)
+                m = re.search(
+                    r"\b([A-Z][a-z]{1,20})\b\s+(akan|will|harus|must|to)\s+(?P<task>.+)",
+                    text,
+                    flags=re.IGNORECASE,
+                )
                 if m:
                     owner = m.group(1)
                     task = m.group("task").strip(" .,:;-")
@@ -177,7 +193,11 @@ class AdvancedNLPExtractor:
             if owner is None and re.search(r"\b(saya|aku|kami|kita)\b", text, flags=re.IGNORECASE):
                 owner = s.get("speaker_id")
                 # try extract phrase after 'akan' or commit verb
-                m2 = re.search(r"\b(?:akan|saya akan|aku akan|saya akan membuat|aku akan membuat|tolong|siapkan|buat|bikin)\b\s*(?P<task>.+)$", text, flags=re.IGNORECASE)
+                m2 = re.search(
+                    r"\b(?:akan|saya akan|aku akan|saya akan membuat|aku akan membuat|tolong|siapkan|buat|bikin)\b\s*(?P<task>.+)$",
+                    text,
+                    flags=re.IGNORECASE,
+                )
                 if m2:
                     task = m2.group("task").strip(" .,:;-")
                     confidence = 0.7
@@ -192,7 +212,14 @@ class AdvancedNLPExtractor:
             if task and len(task.split()) < 3:
                 continue
 
-            results.append({"owner": owner or s.get("speaker_id"), "task": task, "sentence_idx": i, "confidence": confidence})
+            results.append(
+                {
+                    "owner": owner or s.get("speaker_id"),
+                    "task": task,
+                    "sentence_idx": i,
+                    "confidence": confidence,
+                }
+            )
 
         return results
 
@@ -200,7 +227,10 @@ class AdvancedNLPExtractor:
 def extract_decisions_from_sentences(sent_meta: List[Dict[str, Any]]) -> List[str]:
     """Simple decision extraction: look for decision keywords and return cleaned contexts."""
     results: List[str] = []
-    decision_kw = re.compile(r"\b(diputuskan|disepakati|kesimpulan|keputusan|sepakat|setuju|disetujui|putus|decided|decision)\b", flags=re.IGNORECASE)
+    decision_kw = re.compile(
+        r"\b(diputuskan|disepakati|kesimpulan|keputusan|sepakat|setuju|disetujui|putus|decided|decision)\b",
+        flags=re.IGNORECASE,
+    )
 
     for i, s in enumerate(sent_meta):
         text = s.get("text", "").strip()

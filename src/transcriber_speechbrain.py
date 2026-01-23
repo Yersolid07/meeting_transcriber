@@ -43,10 +43,17 @@ class SpeechBrainTranscriber:
             return
 
         try:
-            from speechbrain.pretrained import (  # type: ignore
-                EncoderASR,
-                EncoderDecoderASR,
-            )
+            # Prefer the new import path to avoid deprecation warnings in SpeechBrain >=1.0
+            try:
+                from speechbrain.inference import (  # type: ignore
+                    EncoderASR,
+                    EncoderDecoderASR,
+                )
+            except Exception:
+                from speechbrain.pretrained import (  # type: ignore
+                    EncoderASR,
+                    EncoderDecoderASR,
+                )
 
             # Try EncoderDecoderASR first (seq2seq), fall back to EncoderASR
             try:

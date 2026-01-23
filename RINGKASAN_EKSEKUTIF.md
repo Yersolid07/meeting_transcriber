@@ -20,12 +20,12 @@ Audio → Preprocessing → Diarization → ASR → Summarization → Document (
 ```
 
 ### **Fitur Utama:**
-✅ Speaker diarization (siapa berbicara kapan)  
-✅ Speech-to-text untuk Bahasa Indonesia  
-✅ Extractive summarization dengan keyword detection  
-✅ Document generation (.docx) dengan formatting profesional  
-✅ Evaluation metrics (WER, DER) untuk validasi  
-✅ Batch processing support  
+✅ Speaker diarization (siapa berbicara kapan)
+✅ Speech-to-text untuk Bahasa Indonesia
+✅ Extractive summarization dengan keyword detection
+✅ Document generation (.docx) dengan formatting profesional
+✅ Evaluation metrics (WER, DER) untuk validasi
+✅ Batch processing support
 
 ---
 
@@ -144,21 +144,21 @@ python main.py --batch ./audio_folder/ --output ./results/
 
 ## 📦 DEPENDENCIES
 
-**Core:** torch, speechbrain, transformers, sentence-transformers  
-**Audio:** librosa, soundfile, pydub  
-**NLP:** jiwer, langdetect  
-**Document:** python-docx  
-**Data:** numpy, pandas, scipy, scikit-learn  
+**Core:** torch, speechbrain, transformers, sentence-transformers
+**Audio:** librosa, soundfile, pydub
+**NLP:** jiwer, langdetect
+**Document:** python-docx
+**Data:** numpy, pandas, scipy, scikit-learn
 
 ---
 
 ## 🎯 KESIMPULAN FINAL
 
 ### **Status Proyek:**
-✅ **Lengkap & Functional** - Semua komponen utama sudah implemented  
-✅ **Well-Structured** - Architecture modular dan maintainable  
-✅ **Research-Ready** - Evaluation framework lengkap  
-✅ **Production-Capable** - Dengan beberapa improvements  
+✅ **Lengkap & Functional** - Semua komponen utama sudah implemented
+✅ **Well-Structured** - Architecture modular dan maintainable
+✅ **Research-Ready** - Evaluation framework lengkap
+✅ **Production-Capable** - Dengan beberapa improvements
 
 ### **Suitable untuk:**
 - ✅ Skripsi/Tesis penelitian
@@ -184,6 +184,6 @@ python main.py --batch ./audio_folder/ --output ./results/
 
 ---
 
-**Dibuat:** $(date)  
-**Versi Proyek:** 1.0.0  
+**Dibuat:** $(date)
+**Versi Proyek:** 1.0.0
 **Status Review:** ✅ Complete

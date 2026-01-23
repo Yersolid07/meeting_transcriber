@@ -4,7 +4,7 @@
 
 ### 1. **Dead Code di `src/transcriber.py`**
 
-**Lokasi:** Lines 357-414  
+**Lokasi:** Lines 357-414
 **Masalah:** Duplicate implementation yang unreachable karena ada `return transcripts` di line 356
 
 **Kode yang bermasalah:**
@@ -24,7 +24,7 @@
 
 ### 2. **Incomplete Type Hints**
 
-**Lokasi:** Beberapa file  
+**Lokasi:** Beberapa file
 **Masalah:** Beberapa function menggunakan `callable` instead of `Callable` dari typing
 
 **Contoh di `src/transcriber.py` line 227:**
@@ -38,10 +38,10 @@ progress_callback: Optional[callable] = None,  # Seharusnya Callable
 
 ### 3. **Error Handling Inconsistency**
 
-**Lokasi:** Multiple files  
+**Lokasi:** Multiple files
 **Masalah:** Beberapa tempat menggunakan `print()` untuk errors, beberapa menggunakan logger
 
-**Rekomendasi:** 
+**Rekomendasi:**
 - Standardize ke logger untuk semua error messages
 - Atau gunakan exception handling yang lebih structured
 
@@ -49,10 +49,10 @@ progress_callback: Optional[callable] = None,  # Seharusnya Callable
 
 ### 4. **Potential Memory Issues**
 
-**Lokasi:** `src/diarization.py`  
+**Lokasi:** `src/diarization.py`
 **Masalah:** Embedding extraction dilakukan sequential, tidak ada batching
 
-**Rekomendasi:** 
+**Rekomendasi:**
 - Batch embedding extraction untuk multiple segments
 - Clear GPU cache setelah processing
 
@@ -60,10 +60,10 @@ progress_callback: Optional[callable] = None,  # Seharusnya Callable
 
 ### 5. **Missing Validation**
 
-**Lokasi:** `src/pipeline.py`  
+**Lokasi:** `src/pipeline.py`
 **Masalah:** Tidak ada validation untuk audio duration limits
 
-**Rekomendasi:** 
+**Rekomendasi:**
 - Check `max_duration_minutes` dari config sebelum processing
 - Early exit dengan clear error message
 
@@ -107,5 +107,5 @@ progress_callback: Optional[callable] = None,  # Seharusnya Callable
 
 ---
 
-**Status:** Ready untuk production dengan beberapa improvements  
+**Status:** Ready untuk production dengan beberapa improvements
 **Estimated Fix Time:** 2-4 hours untuk priority 1 & 2

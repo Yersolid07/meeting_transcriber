@@ -198,7 +198,12 @@ class AbstractiveSummarizer:
 
         # Clean up common disfluencies/politeness tokens and ASR annotations
         full_text = re.sub(r"\[OVERLAP\]|\[NOISE\]|<.*?>", "", full_text)
-        full_text = re.sub(r"\b(oke|ya|oke,|baik|sekarang|sekarang kita|nah|jadi|oke\.|jadi\.)\b", "", full_text, flags=re.IGNORECASE)
+        full_text = re.sub(
+            r"\b(oke|ya|oke,|baik|sekarang|sekarang kita|nah|jadi|oke\.|jadi\.)\b",
+            "",
+            full_text,
+            flags=re.IGNORECASE,
+        )
         full_text = re.sub(r"\s+", " ", full_text).strip()
 
         # Chunk and summarize
@@ -241,7 +246,9 @@ class AbstractiveSummarizer:
                 overview = combined
 
         # Extract sentences and key points heuristically from overview
-        key_points = [s.strip() for s in re.split(r"\.|!|\?", overview) if s.strip()][: self.config.num_sentences]
+        key_points = [s.strip() for s in re.split(r"\.|!|\?", overview) if s.strip()][
+            : self.config.num_sentences
+        ]
 
         # Extract decisions and actions via keywords
         sentences = BERTSummarizer(self.config)._split_sentences(full_text)
@@ -317,7 +324,9 @@ class BERTSummarizer:
             try:
                 return AbstractiveSummarizer(self.config).summarize(transcript_segments)
             except Exception as e:
-                print(f"[Summarizer] Abstractive summarization failed, falling back to extractive: {e}")
+                print(
+                    f"[Summarizer] Abstractive summarization failed, falling back to extractive: {e}"
+                )
 
         self._load_model()
 
@@ -377,7 +386,9 @@ class BERTSummarizer:
         for i, s in enumerate(sentences):
             s_clean = re.sub(r"\s+", " ", s).strip()
             s_lower = s_clean.lower()
-            if any(kw in s_lower for kw in self.config.decision_keywords) or re.match(r"^(pertama|kedua|ketiga|keempat|kelima)\b", s_lower):
+            if any(kw in s_lower for kw in self.config.decision_keywords) or re.match(
+                r"^(pertama|kedua|ketiga|keempat|kelima)\b", s_lower
+            ):
                 context = self._expand_context_for_sentence(sent_meta, i, window=1)
                 dec_text = re.sub(r"\[.*?\]", "", context)
                 dec_text = re.sub(r"\s+", " ", dec_text).strip()
@@ -401,7 +412,10 @@ class BERTSummarizer:
         # Extract action items at sentence level with speaker inference
         action_items = []
         seen_tasks = set()
-        action_kw_re = re.compile(r"\b(" + "|".join([re.escape(k) for k in self.config.action_keywords]) + r")\b", flags=re.IGNORECASE)
+        action_kw_re = re.compile(
+            r"\b(" + "|".join([re.escape(k) for k in self.config.action_keywords]) + r")\b",
+            flags=re.IGNORECASE,
+        )
 
         for i, s in enumerate(sentences):
             text = re.sub(r"\[OVERLAP\]|\[NOISE\]|<.*?>", "", s).strip()
@@ -420,7 +434,12 @@ class BERTSummarizer:
             if commit_re.search(text):
                 owner = sent_meta[i]["speaker_id"]
                 # try to isolate the actionable clause
-                task = re.sub(r"^.*?\b(bertanggung jawab|akan|saya akan|aku akan|kamu tolong|tolong|siapkan|bikin)\b", "", text, flags=re.IGNORECASE)
+                task = re.sub(
+                    r"^.*?\b(bertanggung jawab|akan|saya akan|aku akan|kamu tolong|tolong|siapkan|bikin)\b",
+                    "",
+                    text,
+                    flags=re.IGNORECASE,
+                )
                 task = task.strip(" .,:;-")
                 if not task:
                     task = text
@@ -432,7 +451,9 @@ class BERTSummarizer:
 
             if task:
                 # Normalize task text
-                task = re.sub(r"^\s*(aku|saya|kami|kita|kamu)\b[:,\s]*", "", task, flags=re.IGNORECASE).strip()
+                task = re.sub(
+                    r"^\s*(aku|saya|kami|kita|kamu)\b[:,\s]*", "", task, flags=re.IGNORECASE
+                ).strip()
                 task = re.sub(r"\s+", " ", task).strip(" .,:;-")
                 if len(task.split()) < 3:
                     continue
@@ -443,12 +464,14 @@ class BERTSummarizer:
                 if key in seen_tasks:
                     continue
                 seen_tasks.add(key)
-                action_items.append({
-                    "owner": owner or "TBD",
-                    "task": task,
-                    "timestamp": f"{sent_meta[i]['start']:.1f}s",
-                    "due": "",
-                })
+                action_items.append(
+                    {
+                        "owner": owner or "TBD",
+                        "task": task,
+                        "timestamp": f"{sent_meta[i]['start']:.1f}s",
+                        "due": "",
+                    }
+                )
 
         # Fall back to segment-level action extraction if none found
         if not action_items:
@@ -505,7 +528,9 @@ class BERTSummarizer:
                 continue
             # Clean common ASR artifacts and leading fillers
             text = re.sub(r"\[OVERLAP\]|\[NOISE\]|<.*?>", "", seg.text)
-            text = re.sub(r"^\s*(oke|ya|nah|oke,|baik|sekarang|jadi)\b[\s,:-]*", "", text, flags=re.IGNORECASE)
+            text = re.sub(
+                r"^\s*(oke|ya|nah|oke,|baik|sekarang|jadi)\b[\s,:-]*", "", text, flags=re.IGNORECASE
+            )
             text = re.sub(r"\s+", " ", text).strip()
 
             if not text:
@@ -560,7 +585,9 @@ class BERTSummarizer:
             print(f"[Summarizer] Embedding model error: {e}")
             return None
 
-    def _mmr_selection(self, sentences: List[str], embeddings, k: int = 5, lambda_param: float = 0.6) -> List[int]:
+    def _mmr_selection(
+        self, sentences: List[str], embeddings, k: int = 5, lambda_param: float = 0.6
+    ) -> List[int]:
         """Maximal Marginal Relevance (MMR) selection for diversity and coverage.
 
         Returns list of selected sentence indices in original order.
@@ -605,7 +632,9 @@ class BERTSummarizer:
         selected_sorted = sorted(selected)
         return selected_sorted
 
-    def _expand_context_for_sentence(self, sent_meta: List[Dict[str, Any]], idx: int, window: int = 1) -> str:
+    def _expand_context_for_sentence(
+        self, sent_meta: List[Dict[str, Any]], idx: int, window: int = 1
+    ) -> str:
         """Return concatenated sentence with neighboring contextual sentences for better decision/action extraction."""
         start = max(0, idx - window)
         end = min(len(sent_meta), idx + window + 1)
@@ -787,8 +816,12 @@ class BERTSummarizer:
             # 1) explicit commitment patterns
             if commit_re.search(text_lower):
                 # Try to extract short actionable clause
-                task = re.sub(r"^.*?(bertanggung jawab|akan|membuat|siapkan|tolong|saya akan|aku akan|kamu tolong)\b", "",
-                              text, flags=re.IGNORECASE)
+                task = re.sub(
+                    r"^.*?(bertanggung jawab|akan|membuat|siapkan|tolong|saya akan|aku akan|kamu tolong)\b",
+                    "",
+                    text,
+                    flags=re.IGNORECASE,
+                )
                 task = task.strip(" .,:;-")
                 if not task:
                     # fallback to whole segment

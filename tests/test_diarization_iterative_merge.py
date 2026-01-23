@@ -1,8 +1,10 @@
 import os
 import sys
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import numpy as np
+
 from src.diarization import DiarizationConfig, SpeakerDiarizer
 
 
@@ -31,4 +33,6 @@ def test_iterative_centroid_merge_reduces_fragments():
     labels = dz._cluster_embeddings(embeddings)
     unique = np.unique(labels)
     # Expect that at least one merge has happened -> fewer than 6 unique clusters
-    assert len(unique) < 6, f"Expected fewer than 6 clusters after iterative merge, got {len(unique)}"
+    assert (
+        len(unique) < 6
+    ), f"Expected fewer than 6 clusters after iterative merge, got {len(unique)}"

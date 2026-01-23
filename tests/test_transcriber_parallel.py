@@ -1,10 +1,12 @@
-import time
 import os
 import sys
+import time
+
 import torch
+
 # Ensure repo root is on sys.path for tests run in isolation
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.transcriber import ASRTranscriber, ASRConfig, TranscriptSegment
+from src.transcriber import ASRConfig, ASRTranscriber, TranscriptSegment
 
 
 def make_waveform(duration_s=2.0, sample_rate=16000):

@@ -1,10 +1,12 @@
 import os
 import sys
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+from pathlib import Path
 
 import numpy as np
 import torch
-from pathlib import Path
 
 from src.diarization import DiarizationConfig, SpeakerDiarizer
 

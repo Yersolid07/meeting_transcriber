@@ -138,12 +138,24 @@ class AudioProcessor:
                     except Exception:
                         # Try ffmpeg CLI (system binary) to decode to WAV in-memory (no extra Python packages required)
                         try:
-                            import subprocess
                             import io
+                            import subprocess
+
                             import soundfile as sf
 
                             proc = subprocess.run(
-                                ["ffmpeg", "-i", str(audio_path), "-f", "wav", "-ar", "16000", "-ac", "1", "pipe:1"],
+                                [
+                                    "ffmpeg",
+                                    "-i",
+                                    str(audio_path),
+                                    "-f",
+                                    "wav",
+                                    "-ar",
+                                    "16000",
+                                    "-ac",
+                                    "1",
+                                    "pipe:1",
+                                ],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL,
                                 check=True,
@@ -159,8 +171,9 @@ class AudioProcessor:
                         except Exception:
                             # Last resort: use ffmpeg-python to decode into WAV bytes and read via soundfile
                             try:
-                                import ffmpeg
                                 import io
+
+                                import ffmpeg
                                 import soundfile as sf
 
                                 out, _ = (

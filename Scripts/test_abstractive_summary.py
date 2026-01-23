@@ -1,14 +1,16 @@
 import sys
 from pathlib import Path
+
 # Ensure project root is on path when running script directly
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.summarizer import AbstractiveSummarizer, SummarizationConfig
-from src.transcriber import TranscriptSegment
 import re
 
-raw = '''SPEAKER_00 [00:02–00:03]: Oke, before Lee.
+from src.summarizer import AbstractiveSummarizer, SummarizationConfig
+from src.transcriber import TranscriptSegment
+
+raw = """SPEAKER_00 [00:02–00:03]: Oke, before Lee.
 SPEAKER_02 [00:04–00:06]: Kita mulai rapatnya ya.
 SPEAKER_02 [00:07–00:10]: Topik hari ini adalah evaluasi pola kerja tim.
 SPEAKER_00 [00:10–00:12]: Dan dampaknya ke produktivitas.
@@ -154,7 +156,7 @@ SPEAKER_02 [07:05–07:07]: Oke, kalau begitu rapat kita coba.
 SPEAKER_00 [07:08–07:08]: Cukupkan sampai disini.
 SPEAKER_00 [07:09–07:11]: Terima kasih atas masukannya, Beverly.
 SPEAKER_03 [07:12–07:14]: Terima kasih juga ya Rumya.
-'''
+"""
 
 lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
 segments = []
@@ -162,28 +164,31 @@ for l in lines:
     m = re.match(r"(SPEAKER_[0-9A-Z]+) \[([0-9:]+)–([0-9:]+)\]:\s*(.*)$", l)
     if m:
         sp, t0, t1, text = m.groups()
+
         def ts(s):
             parts = s.split(":")
             return int(parts[0]) * 60 + int(parts[1])
+
         start = ts(t0)
         end = ts(t1)
         segments.append(TranscriptSegment(speaker_id=sp, start=start, end=end, text=text))
 
 cfg = SummarizationConfig()
-cfg.method = 'extractive'
+cfg.method = "extractive"
 # Use extractive (BERT embeddings) summarizer
 from src.summarizer import BERTSummarizer
+
 summ = BERTSummarizer(cfg).summarize(segments)
-print('--- Overview ---')
+print("--- Overview ---")
 print(summ.overview)
-print('\n--- Key Points ---')
+print("\n--- Key Points ---")
 for p in summ.key_points:
-    print('-', p)
-print('\n--- Decisions ---')
+    print("-", p)
+print("\n--- Decisions ---")
 for d in summ.decisions:
-    print('-', d)
-print('\n--- Action Items ---')
+    print("-", d)
+print("\n--- Action Items ---")
 for a in summ.action_items:
-    print('-', a)
-print('\n--- Topics ---')
-print(', '.join(summ.topics))
+    print("-", a)
+print("\n--- Topics ---")
+print(", ".join(summ.topics))

@@ -7,12 +7,12 @@ Default is Whisper-base for multilingual support; supports beam CTC decoding for
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import logging
 import numpy as np
 import torch
 
@@ -193,18 +193,22 @@ class ASRTranscriber:
                         torchaudio.AudioMetaData = AudioMetaData  # type: ignore
 
                     import whisperx  # type: ignore
+
                     # Allowlist OmegaConf ListConfig for torch.load (needed since PyTorch 2.6 weights_only=True)
                     try:
-                        from omegaconf.listconfig import ListConfig  # type: ignore
-                        from omegaconf.base import ContainerMetadata  # type: ignore
-                        import torch.serialization as ts
                         import typing
+
+                        import torch.serialization as ts
+                        from omegaconf.base import ContainerMetadata  # type: ignore
+                        from omegaconf.listconfig import ListConfig  # type: ignore
+
                         # Allow torch.load with weights_only=True to unpickle HF configs that store plain list
                         # Allowlist common builtin types and container types used inside HF checkpoints
                         ts.add_safe_globals([dict, list, int, float, str, tuple, set])
 
                         # Add collections.defaultdict (needed by some HF checkpoints under newer PyTorch)
                         import collections
+
                         ts.add_safe_globals([collections.defaultdict])
 
                         # Ensure OmegaConf ListConfig is allowlisted (common in HF configs)
@@ -213,6 +217,7 @@ class ASRTranscriber:
                         # Allow AnyNode from OmegaConf which some HF configs embed
                         try:
                             from omegaconf.nodes import AnyNode  # type: ignore
+
                             ts.add_safe_globals([AnyNode])
                         except Exception:
                             # Not strictly fatal; continue if import fails
@@ -221,6 +226,7 @@ class ASRTranscriber:
                         # Some checkpoints include TorchVersion objects
                         try:
                             import torch
+
                             ts.add_safe_globals([torch.torch_version.TorchVersion])
                         except Exception:
                             pass
@@ -228,6 +234,7 @@ class ASRTranscriber:
                         # Add ContainerMetadata and Metadata from OmegaConf if present
                         try:
                             from omegaconf.base import Metadata  # type: ignore
+
                             ts.add_safe_globals([ContainerMetadata, Metadata, typing.Any])
                         except Exception:
                             ts.add_safe_globals([ContainerMetadata, typing.Any])
@@ -264,7 +271,9 @@ class ASRTranscriber:
 
                     # Robust loading: try to parse WeightsUnpickler errors and auto-allowlist missing globals
                     def _load_model_with_retry():
-                        import re, importlib
+                        import importlib
+                        import re
+
                         import torch.serialization as ts
 
                         max_attempts = 8
@@ -284,12 +293,18 @@ class ASRTranscriber:
                                     raise
                                 msg = str(e)
                                 # Find module.Class patterns in the error message
-                                missing = set(re.findall(r'GLOBAL\s+([\w\.]+)\s+was not an allowed global', msg))
+                                missing = set(
+                                    re.findall(
+                                        r"GLOBAL\s+([\w\.]+)\s+was not an allowed global", msg
+                                    )
+                                )
                                 # Also catch suggestions in the message
-                                more = set(re.findall(r'add_safe_globals\(\[([^\]]+)\]\)', msg))
+                                more = set(re.findall(r"add_safe_globals\(\[([^\]]+)\]\)", msg))
                                 for m in more:
                                     # split comma-separated list like 'collections.defaultdict' or 'omegaconf.nodes.AnyNode'
-                                    parts = [p.strip().strip('\"\'\'') for p in m.split(',') if p.strip()]
+                                    parts = [
+                                        p.strip().strip("\"''") for p in m.split(",") if p.strip()
+                                    ]
                                     missing.update(parts)
 
                                 if not missing:
@@ -298,13 +313,17 @@ class ASRTranscriber:
 
                                 for fullname in missing:
                                     try:
-                                        module_name, cls_name = fullname.rsplit('.', 1)
+                                        module_name, cls_name = fullname.rsplit(".", 1)
                                         mod = importlib.import_module(module_name)
                                         cls = getattr(mod, cls_name)
                                         ts.add_safe_globals([cls])
-                                        self.logger.info(f"Auto-added {fullname} to torch safe globals")
+                                        self.logger.info(
+                                            f"Auto-added {fullname} to torch safe globals"
+                                        )
                                     except Exception as ie:
-                                        self.logger.warning(f"Could not auto-add {fullname} to safe globals: {ie}")
+                                        self.logger.warning(
+                                            f"Could not auto-add {fullname} to safe globals: {ie}"
+                                        )
                                 # retry loop
 
                     self._whisperx_model = _load_model_with_retry()
@@ -318,7 +337,10 @@ class ASRTranscriber:
             # If user explicitly selected WhisperX and the WhisperX model loaded OK,
             # prefer WhisperX and skip attempting the Transformers pipeline which may
             # not recognize model names like 'large-v3-turbo' and produce confusing errors.
-            if getattr(self.config, "backend", None) == "whisperx" and self._whisperx_model is not None:
+            if (
+                getattr(self.config, "backend", None) == "whisperx"
+                and self._whisperx_model is not None
+            ):
                 self._pipeline = "WHISPERX"
                 self.logger.info("WhisperX backend active; skipping Transformers pipeline load")
             else:
@@ -371,7 +393,9 @@ class ASRTranscriber:
 
                                 if self.config.use_lm and self.config.lm_path:
                                     self.logger.info("Building CTC decoder with LM...")
-                                    self._ctc_decoder = build_ctcdecoder(labels, self.config.lm_path)
+                                    self._ctc_decoder = build_ctcdecoder(
+                                        labels, self.config.lm_path
+                                    )
                                 else:
                                     self.logger.info("Building CTC decoder (no LM)")
                                     self._ctc_decoder = build_ctcdecoder(labels)
@@ -409,7 +433,9 @@ class ASRTranscriber:
             # forced WhisperX but model_id is a Transformers repo), attempt a safe
             # runtime fallback to a lightweight Whisper model so interactive UI flows
             # remain responsive instead of crashing.
-            self.logger.error(f"ASR model load failed: {e}. Attempting fallback to 'whisper' backend with 'openai/whisper-small'.")
+            self.logger.error(
+                f"ASR model load failed: {e}. Attempting fallback to 'whisper' backend with 'openai/whisper-small'."
+            )
             try:
                 self.config.backend = "whisper"
                 self.config.model_id = "openai/whisper-small"
@@ -511,13 +537,19 @@ class ASRTranscriber:
                                 confidence=seg.confidence,
                                 is_overlap=seg.is_overlap,
                                 metadata={
-                                    "embedding": seg.embedding if hasattr(seg, "embedding") else None,
+                                    "embedding": (
+                                        seg.embedding if hasattr(seg, "embedding") else None
+                                    ),
                                     "asr_model": self.config.model_id,
                                 },
                             )
                         )
             # Filter out tasks that were handled by mapping
-            tasks = [(i, s) for (i, s) in tasks if not any(t.start == s.start and t.end == s.end for t in transcripts)]
+            tasks = [
+                (i, s)
+                for (i, s) in tasks
+                if not any(t.start == s.start and t.end == s.end for t in transcripts)
+            ]
 
         # If quick_mode or parallel workers > 1, perform parallel per-segment ASR
         workers = int(getattr(self.config, "parallel_workers", 1))
@@ -534,7 +566,9 @@ class ASRTranscriber:
                     cs = int(ctx_start * sample_rate)
                     ce = int(min(ctx_end * sample_rate, waveform.shape[-1]))
                     audio_np = waveform[:, cs:ce].squeeze().cpu().numpy()
-                    text = self._transcribe_audio(torch.from_numpy(audio_np).unsqueeze(0), sample_rate)
+                    text = self._transcribe_audio(
+                        torch.from_numpy(audio_np).unsqueeze(0), sample_rate
+                    )
                 else:
                     start_sample = int(seg.start * sample_rate)
                     end_sample = int(seg.end * sample_rate)
@@ -560,7 +594,9 @@ class ASRTranscriber:
                                 confidence=seg.confidence,
                                 is_overlap=seg.is_overlap,
                                 metadata={
-                                    "embedding": seg.embedding if hasattr(seg, "embedding") else None,
+                                    "embedding": (
+                                        seg.embedding if hasattr(seg, "embedding") else None
+                                    ),
                                     "asr_model": self.config.model_id,
                                 },
                             )
@@ -577,7 +613,9 @@ class ASRTranscriber:
                     cs = int(ctx_start * sample_rate)
                     ce = int(min(ctx_end * sample_rate, waveform.shape[-1]))
                     audio_np = waveform[:, cs:ce].squeeze().cpu().numpy()
-                    text = self._transcribe_audio(torch.from_numpy(audio_np).unsqueeze(0), sample_rate)
+                    text = self._transcribe_audio(
+                        torch.from_numpy(audio_np).unsqueeze(0), sample_rate
+                    )
                 else:
                     start_sample = int(seg.start * sample_rate)
                     end_sample = int(seg.end * sample_rate)
@@ -682,7 +720,9 @@ class ASRTranscriber:
                     if "text" in result and result.get("text"):
                         return result.get("text", "")
                     if "segments" in result and isinstance(result["segments"], list):
-                        seg_texts = [s.get("text", "") for s in result["segments"] if isinstance(s, dict)]
+                        seg_texts = [
+                            s.get("text", "") for s in result["segments"] if isinstance(s, dict)
+                        ]
                         joined = " ".join(t.strip() for t in seg_texts if t and t.strip())
                         return joined or ""
                     # fallback to empty

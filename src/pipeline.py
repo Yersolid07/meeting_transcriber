@@ -249,11 +249,32 @@ class MeetingTranscriberPipeline:
             # Apply preset defaults (deployment/balanced/fast/accurate)
             preset = getattr(self.config, "preset", None)
             if preset == "deployment":
-                # Deployment preset: WhisperX large-v3-turbo (int8 on CPU), full-audio mapping, tuned parallelism
+                # Deployment preset: prefer WhisperX large-v3-turbo (int8 on CPU), full-audio mapping, tuned parallelism
                 asr_cfg.backend = "whisperx"
-                asr_cfg.model_id = getattr(self.config, "asr_model_id", "large-v3-turbo") or "large-v3-turbo"
+
+                # If user did not explicitly provide a WhisperX-compatible model (e.g. the
+                # configured model contains 'wav2vec' or is an existing TF checkpoint),
+                # override to a known WhisperX-compatible model id. This avoids trying to
+                # load a Transformers checkpoint with WhisperX which expects CTranslate2 format
+                # (contains 'model.bin').
+                user_model = getattr(self.config, "asr_model_id", "") or ""
+                user_model_l = user_model.lower()
+                if (
+                    (not user_model_l)
+                    or ("wav2vec" in user_model_l)
+                    or user_model_l.startswith("models/")
+                ):
+                    asr_cfg.model_id = "large-v3-turbo"
+                    self._log(
+                        "Preset 'deployment' selected: overriding ASR model to 'large-v3-turbo' for WhisperX compatibility."
+                    )
+                else:
+                    asr_cfg.model_id = user_model
+
                 asr_cfg.use_full_audio_for_segments = True
-                asr_cfg.whisperx_compute_type = getattr(self.config, "whisperx_compute_type", "int8") or "int8"
+                asr_cfg.whisperx_compute_type = (
+                    getattr(self.config, "whisperx_compute_type", "int8") or "int8"
+                )
                 try:
                     import os
 
@@ -403,7 +424,9 @@ class MeetingTranscriberPipeline:
         if getattr(self.config, "tune_diarization", False):
             self._log("Tuning diarization hyperparameters...")
             try:
-                self.diarizer.auto_tune(self._waveform, self._sample_rate, num_speakers=num_speakers)
+                self.diarizer.auto_tune(
+                    self._waveform, self._sample_rate, num_speakers=num_speakers
+                )
             except Exception as e:
                 self._log(f"Diarization tuning failed (continuing with defaults): {e}")
 
@@ -504,7 +527,10 @@ class MeetingTranscriberPipeline:
         if getattr(self.config, "speaker_map_path", None):
             try:
                 speaker_map = self._load_speaker_map(self.config.speaker_map_path)
-                save_json(speaker_map, Path(self.config.cache_dir) / f"{Path(audio_path).stem}_speaker_map.json")
+                save_json(
+                    speaker_map,
+                    Path(self.config.cache_dir) / f"{Path(audio_path).stem}_speaker_map.json",
+                )
             except Exception:
                 pass
 
@@ -623,13 +649,48 @@ class MeetingTranscriberPipeline:
             wer_result = self.evaluator.calculate_wer(reference_transcript, hypothesis)
             self._log(f"WER: {wer_result.wer:.4f} ({wer_result.wer*100:.2f}%)")
 
-        # Calculate DER if reference diarization provided
+            # Calculate DER if reference diarization provided
         if reference_diarization and self._diarization_segments:
             hypothesis_diarization = [
                 (seg.speaker_id, seg.start, seg.end) for seg in self._diarization_segments
             ]
             der_result = self.evaluator.calculate_der(reference_diarization, hypothesis_diarization)
             self._log(f"DER: {der_result.der:.4f} ({der_result.der*100:.2f}%)")
+
+        # If reference diarization not provided but reference transcript contains speaker labels,
+        # attempt to build a reference diarization by aligning the labeled transcript to the
+        # pipeline's transcript segments. This often improves DER accuracy when GT RTTM is missing.
+        if not reference_diarization and reference_transcript and self._diarization_segments:
+            # Heuristic detection: presence of 'Name:' lines
+            if ":" in reference_transcript and any(
+                line.strip().endswith(":") or ":" in line
+                for line in reference_transcript.splitlines()[:20]
+            ):
+                try:
+                    from src.utils import (
+                        align_reference_to_segments,
+                        parse_speaker_labeled_text,
+                    )
+
+                    utterances = parse_speaker_labeled_text(reference_transcript)
+                    if utterances:
+                        hyp_segs = self._transcript_segments or []
+                        # Build reference diarization from alignment
+                        derived_ref = align_reference_to_segments(utterances, hyp_segs)
+                        if derived_ref:
+                            hypothesis_diarization = [
+                                (seg.speaker_id, seg.start, seg.end)
+                                for seg in self._diarization_segments
+                            ]
+                            der_result = self.evaluator.calculate_der(
+                                derived_ref, hypothesis_diarization
+                            )
+                            self._log(
+                                f"Derived RTTM used for DER (from speaker-labeled transcript). DER: {der_result.der:.4f} ({der_result.der*100:.2f}%)"
+                            )
+                except Exception as e:
+                    self._log(f"Auto-alignment for RTTM failed: {e}")
+                    pass
 
         return EvaluationResult(
             sample_name=sample_name,
@@ -735,7 +796,7 @@ class MeetingTranscriberPipeline:
 
         # Update action item owners in summary
         try:
-            for ai in (self._summary.action_items or []):
+            for ai in self._summary.action_items or []:
                 owner = ai.get("owner")
                 if owner and owner in mapping:
                     ai["owner"] = mapping[owner]
@@ -745,14 +806,16 @@ class MeetingTranscriberPipeline:
         # Finally update diarization segments as well (if present)
         try:
             self._log(f"Applying speaker mapping to diarization segments: {mapping}")
-            for dseg in (self._diarization_segments or []):
+            for dseg in self._diarization_segments or []:
                 orig = dseg.speaker_id
                 mapped = mapping.get(orig)
                 self._log(f"Segment {orig} -> mapped: {mapped}")
                 if mapped and mapped != orig:
                     dseg.metadata["original_speaker_id"] = orig
                     dseg.speaker_id = mapped
-            self._log(f"Post-map speaker ids: {[d.speaker_id for d in (self._diarization_segments or [])]}")
+            self._log(
+                f"Post-map speaker ids: {[d.speaker_id for d in (self._diarization_segments or [])]}"
+            )
         except Exception as e:
             self._log(f"Error applying speaker map to diarization segments: {e}")
             pass
@@ -822,11 +885,14 @@ class MeetingTranscriberPipeline:
             "num_segments": len(self._diarization_segments),
             "unique_speakers": unique_speakers,
             "segments": [
-                {"speaker_id": s.speaker_id, "start": s.start, "end": s.end} for s in self._diarization_segments
+                {"speaker_id": s.speaker_id, "start": s.start, "end": s.end}
+                for s in self._diarization_segments
             ],
         }
 
-    def apply_speaker_map(self, mapping: dict, save_to_cache: bool = False, audio_id: Optional[str] = None):
+    def apply_speaker_map(
+        self, mapping: dict, save_to_cache: bool = False, audio_id: Optional[str] = None
+    ):
         """Apply a manual speaker mapping to internal state and optionally save the map to cache.
 
         mapping: dict mapping original speaker id -> desired display name
@@ -850,10 +916,17 @@ class MeetingTranscriberPipeline:
 
         Runs ASR, summarization, and document generation using existing in-memory diarization.
         """
-        if getattr(self, "_waveform", None) is None or getattr(self, "_diarization_segments", None) is None:
-            raise RuntimeError("Diarization state not found. Run run_diarization(audio_path) first.")
+        if (
+            getattr(self, "_waveform", None) is None
+            or getattr(self, "_diarization_segments", None) is None
+        ):
+            raise RuntimeError(
+                "Diarization state not found. Run run_diarization(audio_path) first."
+            )
 
-        update_progress = lambda step, cur, total: progress_callback(step, cur, total) if progress_callback else None
+        update_progress = lambda step, cur, total: (
+            progress_callback(step, cur, total) if progress_callback else None
+        )
 
         # Step 3: ASR
         update_progress("Transcribing speech", 3, 5)
@@ -896,7 +969,9 @@ class MeetingTranscriberPipeline:
             date=date or datetime.now().strftime("%d %B %Y"),
             time=datetime.now().strftime("%H:%M"),
             location=location,
-            duration=format_duration(self.audio_processor.get_duration(self._waveform, self._sample_rate)),
+            duration=format_duration(
+                self.audio_processor.get_duration(self._waveform, self._sample_rate)
+            ),
             participants=participants,
         )
 

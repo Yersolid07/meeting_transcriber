@@ -6,12 +6,12 @@ Exports meeting minutes to formatted .docx using python-docx.
 
 from __future__ import annotations
 
+import re
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-import re
-import warnings
 
 try:
     from docx import Document
@@ -529,7 +529,9 @@ class DocumentGenerator:
             overview_para.runs[0].font.color.rgb = RGBColor(128, 128, 128)
 
         # Key points (filter placeholders)
-        filtered_points = [p for p in (summary.key_points or []) if not self._is_placeholder_text(p)]
+        filtered_points = [
+            p for p in (summary.key_points or []) if not self._is_placeholder_text(p)
+        ]
         if filtered_points:
             subheading = doc.add_heading("Poin-Poin Penting", level=2)
             subheading.runs[0].font.size = Pt(self.config.heading2_font_size)
@@ -760,14 +762,14 @@ class DocumentGenerator:
             '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n'
             '  <Default Extension="xml" ContentType="application/xml"/>\n'
             '  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>\n'
-            '</Types>'
+            "</Types>"
         )
 
         rels = (
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
             '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>\n'
-            '</Relationships>'
+            "</Relationships>"
         )
 
         doc_xml_header = (
@@ -787,16 +789,16 @@ class DocumentGenerator:
             'xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" '
             'xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" '
             'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">\n'
-            '  <w:body>\n'
+            "  <w:body>\n"
         )
 
         doc_xml_footer = (
-            '    <w:sectPr>\n'
+            "    <w:sectPr>\n"
             '      <w:pgSz w:w="11900" w:h="16840"/>\n'
             '      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>\n'
-            '    </w:sectPr>\n'
-            '  </w:body>\n'
-            '</w:document>'
+            "    </w:sectPr>\n"
+            "  </w:body>\n"
+            "</w:document>"
         )
 
         # Build paragraphs as simple <w:p><w:r><w:t>text</w:t></w:r></w:p>
@@ -807,7 +809,7 @@ class DocumentGenerator:
                 # preserve blank line
                 paras_xml.append("    <w:p/>\n")
             else:
-                paras_xml.append(f"    <w:p><w:r><w:t xml:space=\"preserve\">{t}</w:t></w:r></w:p>\n")
+                paras_xml.append(f'    <w:p><w:r><w:t xml:space="preserve">{t}</w:t></w:r></w:p>\n')
 
         doc_xml = doc_xml_header + "".join(paras_xml) + doc_xml_footer
 

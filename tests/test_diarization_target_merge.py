@@ -1,8 +1,10 @@
 import os
 import sys
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 import numpy as np
+
 from src.diarization import DiarizationConfig, SpeakerDiarizer
 
 

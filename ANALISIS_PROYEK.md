@@ -2,9 +2,9 @@
 
 ## 🎯 OVERVIEW PROYEK
 
-**Nama Proyek:** Meeting Transcriber - Sistem Notulensi Rapat Otomatis  
-**Teknologi Utama:** SpeechBrain (ASR + Diarization) + BERT (Summarization)  
-**Bahasa Target:** Bahasa Indonesia  
+**Nama Proyek:** Meeting Transcriber - Sistem Notulensi Rapat Otomatis
+**Teknologi Utama:** SpeechBrain (ASR + Diarization) + BERT (Summarization)
+**Bahasa Target:** Bahasa Indonesia
 **Tujuan:** Mengubah rekaman audio rapat menjadi dokumen notulensi terstruktur (.docx) secara otomatis
 
 ---
@@ -68,7 +68,7 @@ Output: Notulensi Rapat Terstruktur
   - **Whisper** (default): `openai/whisper-base` dengan language detection
   - **Wav2Vec2:** `indonesian-nlp/wav2vec2-large-xlsr-indonesian`
   - **SpeechBrain:** Adapter via `transcriber_speechbrain.py`
-  
+
 - **Fitur:**
   - Per-segment transcription dengan context window
   - Full-audio ASR dengan timestamp alignment (optional)
@@ -395,11 +395,11 @@ python main.py --audio meeting.wav \
 ## 📝 KESIMPULAN
 
 ### **Proyek ini adalah:**
-✅ Sistem end-to-end yang lengkap untuk meeting transcription  
-✅ Well-structured dengan modular architecture  
-✅ Research-oriented dengan evaluation framework  
-✅ Production-ready dengan batch processing & error handling  
-✅ Optimized untuk Bahasa Indonesia  
+✅ Sistem end-to-end yang lengkap untuk meeting transcription
+✅ Well-structured dengan modular architecture
+✅ Research-oriented dengan evaluation framework
+✅ Production-ready dengan batch processing & error handling
+✅ Optimized untuk Bahasa Indonesia
 
 ### **Suitable untuk:**
 - Skripsi/Tesis penelitian speech recognition
@@ -418,6 +418,6 @@ python main.py --audio meeting.wav \
 
 ---
 
-**Dibuat:** $(date)  
-**Analis:** AI Code Reviewer  
+**Dibuat:** $(date)
+**Analis:** AI Code Reviewer
 **Versi Proyek:** 1.0.0

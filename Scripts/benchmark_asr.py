@@ -12,10 +12,10 @@ and optionally runs real pipeline runs to compare default vs `--quick-asr`.
 """
 
 import argparse
-import time
+import json
 import os
 import sys
-import json
+import time
 from pathlib import Path
 
 # Ensure local package imports work when running script directly
@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import torch
 
-from src.transcriber import ASRConfig, ASRTranscriber
 from src.pipeline import MeetingTranscriberPipeline, PipelineConfig
+from src.transcriber import ASRConfig, ASRTranscriber
 
 
 class DummyTranscriber(ASRTranscriber):
@@ -75,7 +75,11 @@ def synthetic_per_segment_benchmark():
     print(f"Parallel time: {parallel_time:.2f}s")
     print(f"Speedup      : {serial_time / parallel_time:.2f}x")
 
-    return {"serial_time": serial_time, "parallel_time": parallel_time, "speedup": serial_time / parallel_time}
+    return {
+        "serial_time": serial_time,
+        "parallel_time": parallel_time,
+        "speedup": serial_time / parallel_time,
+    }
 
 
 def real_pipeline_benchmark(
@@ -136,14 +140,46 @@ def real_pipeline_benchmark(
 
 def main():
     parser = argparse.ArgumentParser(description="ASR benchmark utilities")
-    parser.add_argument("--synthetic", action="store_true", help="Run synthetic per-segment benchmark (fast)")
-    parser.add_argument("--sample-audio", type=str, default=None, help="Path to sample audio for real pipeline benchmark")
+    parser.add_argument(
+        "--synthetic", action="store_true", help="Run synthetic per-segment benchmark (fast)"
+    )
+    parser.add_argument(
+        "--sample-audio",
+        type=str,
+        default=None,
+        help="Path to sample audio for real pipeline benchmark",
+    )
     parser.add_argument("--runs", type=int, default=1, help="Number of runs for real benchmark")
-    parser.add_argument("--json-output", type=str, default=None, help="Path to write JSON results for synthetic benchmark")
-    parser.add_argument("--quick-backend", type=str, default=None, help="Force quick pipeline ASR backend (e.g., whisperx, whisper, transformers, speechbrain)")
-    parser.add_argument("--quick-model", type=str, default=None, help="Force quick pipeline ASR model id (e.g., large-v3-turbo)")
-    parser.add_argument("--quick-whisperx-compute-type", type=str, default="int8", help="WhisperX compute type for forced quick pipeline (int8|float16|int8_float16)")
-    parser.add_argument("--quick-parallel-workers", type=int, default=None, help="Override parallel workers for quick pipeline (int)")
+    parser.add_argument(
+        "--json-output",
+        type=str,
+        default=None,
+        help="Path to write JSON results for synthetic benchmark",
+    )
+    parser.add_argument(
+        "--quick-backend",
+        type=str,
+        default=None,
+        help="Force quick pipeline ASR backend (e.g., whisperx, whisper, transformers, speechbrain)",
+    )
+    parser.add_argument(
+        "--quick-model",
+        type=str,
+        default=None,
+        help="Force quick pipeline ASR model id (e.g., large-v3-turbo)",
+    )
+    parser.add_argument(
+        "--quick-whisperx-compute-type",
+        type=str,
+        default="int8",
+        help="WhisperX compute type for forced quick pipeline (int8|float16|int8_float16)",
+    )
+    parser.add_argument(
+        "--quick-parallel-workers",
+        type=int,
+        default=None,
+        help="Override parallel workers for quick pipeline (int)",
+    )
 
     args = parser.parse_args()
 

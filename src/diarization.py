@@ -6,11 +6,11 @@ Implements VAD + Speaker Embedding + Clustering pipeline for speaker diarization
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import logging
 import numpy as np
 import torch
 from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
@@ -64,7 +64,9 @@ class DiarizationConfig:
 
     # Optional: target speaker count - if set, clusters will be greedily merged to meet target
     target_num_speakers: Optional[int] = None
-    target_force_threshold: float = 1.0  # 1.0 => allow merges regardless of distance; lower = more conservative
+    target_force_threshold: float = (
+        1.0  # 1.0 => allow merges regardless of distance; lower = more conservative
+    )
 
     # Device
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -289,9 +291,7 @@ class SpeakerDiarizer:
                                 except Exception:
                                     pass
 
-                    self.logger.error(
-                        f"Failed to load SpeechBrain embedding model: {err_msg}"
-                    )
+                    self.logger.error(f"Failed to load SpeechBrain embedding model: {err_msg}")
 
                     # Try to salvage by copying an existing cached snapshot or downloading directly into dest_dir
                     try:
@@ -373,7 +373,9 @@ class SpeakerDiarizer:
                         )
             except Exception:
                 # Import of SpeechBrain failed entirely; honor allow_fallback setting
-                self.logger.warning("Could not import SpeechBrain; checking 'allow_fallback' setting")
+                self.logger.warning(
+                    "Could not import SpeechBrain; checking 'allow_fallback' setting"
+                )
                 if getattr(self.config, "allow_fallback", False):
                     self.logger.warning(
                         "Falling back to MFCC-based deterministic embeddings (allow_fallback=True)"
@@ -494,7 +496,9 @@ class SpeakerDiarizer:
 
         return processed_segments
 
-    def auto_tune(self, waveform: torch.Tensor, sample_rate: int = 16000, num_speakers: Optional[int] = None) -> dict:
+    def auto_tune(
+        self, waveform: torch.Tensor, sample_rate: int = 16000, num_speakers: Optional[int] = None
+    ) -> dict:
         """Auto-tune clustering-related hyperparameters by searching simple parameter grid.
 
         This method extracts embeddings and tries different clustering thresholds and
@@ -576,7 +580,9 @@ class SpeakerDiarizer:
                         continue
 
             # Apply best params
-            self.config.clustering_threshold = float(best_params.get("clustering_threshold", orig_threshold))
+            self.config.clustering_threshold = float(
+                best_params.get("clustering_threshold", orig_threshold)
+            )
             self.config.min_cluster_size = int(best_params.get("min_cluster_size", orig_min_size))
             # If a desired num_speakers was provided, set target merge accordingly
             if num_speakers is not None:
@@ -587,6 +593,7 @@ class SpeakerDiarizer:
         finally:
             # nothing to restore; we've intentionally applied best params
             pass
+
     def _detect_speech(self, waveform: torch.Tensor, sample_rate: int) -> List[Tuple[float, float]]:
         """
         Detect speech regions using energy-based VAD.
@@ -731,7 +738,12 @@ class SpeakerDiarizer:
         - Fast MFCC embedding path when `use_fast_embedding` is True
         """
         # Try disk cache first
-        if cache_dir and audio_id and self.config.embedding_cache and getattr(self.config, "embedding_cache", True):
+        if (
+            cache_dir
+            and audio_id
+            and self.config.embedding_cache
+            and getattr(self.config, "embedding_cache", True)
+        ):
             try:
                 import os
 
@@ -748,7 +760,11 @@ class SpeakerDiarizer:
         embeddings = [None] * n
 
         # If fallback or user requested fast embedding, compute MFCC-based embeddings vectorized
-        if (self._embedding_model == "FALLBACK" or self._embedding_model is None) or getattr(self.config, "use_fast_embedding", False) or fast_mode:
+        if (
+            (self._embedding_model == "FALLBACK" or self._embedding_model is None)
+            or getattr(self.config, "use_fast_embedding", False)
+            or fast_mode
+        ):
             for i, (start, end) in enumerate(windows):
                 start_sample = int(start * sample_rate)
                 end_sample = int(end * sample_rate)
@@ -793,7 +809,9 @@ class SpeakerDiarizer:
                 batch = segs[i : i + batch_size]
                 # Stack into a tensor batch
                 try:
-                    batch_tensor = torch.stack([b.squeeze(0) if b.dim() == 2 else b for b in batch], dim=0)
+                    batch_tensor = torch.stack(
+                        [b.squeeze(0) if b.dim() == 2 else b for b in batch], dim=0
+                    )
                 except Exception:
                     # Some models expect list of tensors; keep as list
                     batch_tensor = batch
@@ -801,7 +819,9 @@ class SpeakerDiarizer:
                 with torch.no_grad():
                     try:
                         # Move to model device if available
-                        if hasattr(self._embedding_model, "device") and isinstance(batch_tensor, torch.Tensor):
+                        if hasattr(self._embedding_model, "device") and isinstance(
+                            batch_tensor, torch.Tensor
+                        ):
                             batch_tensor = batch_tensor.to(self._embedding_model.device)
 
                         out = None
@@ -818,7 +838,17 @@ class SpeakerDiarizer:
                         if isinstance(out, torch.Tensor):
                             out_np = out.cpu().numpy()
                         elif isinstance(out, list):
-                            out_np = np.stack([o.squeeze().cpu().numpy() if isinstance(o, torch.Tensor) else np.array(o) for o in out], axis=0)
+                            out_np = np.stack(
+                                [
+                                    (
+                                        o.squeeze().cpu().numpy()
+                                        if isinstance(o, torch.Tensor)
+                                        else np.array(o)
+                                    )
+                                    for o in out
+                                ],
+                                axis=0,
+                            )
                         else:
                             out_np = np.array(out)
 
@@ -832,7 +862,9 @@ class SpeakerDiarizer:
                         for bb_idx, seg in enumerate(batch):
                             try:
                                 with torch.no_grad():
-                                    if hasattr(self._embedding_model, "device") and isinstance(seg, torch.Tensor):
+                                    if hasattr(self._embedding_model, "device") and isinstance(
+                                        seg, torch.Tensor
+                                    ):
                                         seg = seg.to(self._embedding_model.device)
                                     emb = self._embedding_model.encode_batch(seg)
                                     emb = emb.squeeze().cpu().numpy()
@@ -1110,9 +1142,9 @@ class SpeakerDiarizer:
 
             # Iterative silhouette-guided merging: try merging closest centroid pairs while it improves or meets configured criteria
             try:
-                iterative_thresh = getattr(self.config, 'iterative_merge_threshold', threshold)
-                silhouette_min = getattr(self.config, 'iterative_merge_silhouette_threshold', 0.0)
-                max_merge_iters = getattr(self.config, 'iterative_merge_max_iters', 10)
+                iterative_thresh = getattr(self.config, "iterative_merge_threshold", threshold)
+                silhouette_min = getattr(self.config, "iterative_merge_silhouette_threshold", 0.0)
+                max_merge_iters = getattr(self.config, "iterative_merge_max_iters", 10)
 
                 def compute_centroids(curr_labels):
                     uniq = np.unique(curr_labels)
@@ -1135,7 +1167,7 @@ class SpeakerDiarizer:
                 prev_score = None
                 try:
                     if len(np.unique(curr_labels)) > 1:
-                        prev_score = silhouette_score(embeddings_norm, curr_labels, metric='cosine')
+                        prev_score = silhouette_score(embeddings_norm, curr_labels, metric="cosine")
                 except Exception:
                     prev_score = None
 
@@ -1155,7 +1187,9 @@ class SpeakerDiarizer:
 
                     try:
                         if len(np.unique(next_labels)) > 1:
-                            next_score = silhouette_score(embeddings_norm, next_labels, metric='cosine')
+                            next_score = silhouette_score(
+                                embeddings_norm, next_labels, metric="cosine"
+                            )
                         else:
                             next_score = 1.0
                     except Exception:
@@ -1193,6 +1227,7 @@ class SpeakerDiarizer:
                     force_thresh = float(getattr(self.config, "target_force_threshold", 1.0))
                     if target_k is not None:
                         curr_labels = labels.copy()
+
                         def compute_centroids(curr):
                             uniq = np.unique(curr)
                             return {l: embeddings_norm[curr == l].mean(axis=0) for l in uniq}

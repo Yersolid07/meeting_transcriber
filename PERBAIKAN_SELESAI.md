@@ -3,23 +3,23 @@
 ## 📋 Issues yang Diperbaiki
 
 ### ✅ 1. Dead Code di `src/transcriber.py`
-**Status:** FIXED  
+**Status:** FIXED
 **Perubahan:** Menghapus duplicate unreachable code (lines 357-414) yang tidak akan pernah dieksekusi karena ada `return transcripts` di line 356.
 
 ### ✅ 2. Type Hints Incomplete
-**Status:** FIXED  
+**Status:** FIXED
 **Perubahan:**
 - Import `Callable` dari `typing`
 - Mengganti `Optional[callable]` dengan `Optional[Callable[[int, int], None]]` di `transcribe_segments()` method
 
 ### ✅ 3. Error Handling Inconsistent
-**Status:** FIXED  
+**Status:** FIXED
 **Perubahan:**
-- **`src/transcriber.py`:** 
+- **`src/transcriber.py`:**
   - Menambahkan logger dengan `setup_logger("ASRTranscriber")`
   - Mengganti semua `print()` dengan `self.logger.info()`, `self.logger.warning()`, atau `self.logger.error()`
-  
-- **`src/diarization.py`:** 
+
+- **`src/diarization.py`:**
   - Menambahkan logger dengan `setup_logger("SpeakerDiarizer")`
   - Mengganti semua `print("[Diarizer] ...")` dengan logger methods yang sesuai
   - Info messages → `self.logger.info()`
@@ -28,7 +28,7 @@
   - Debug messages → `self.logger.debug()`
 
 ### ✅ 4. Input Validation untuk Audio Duration
-**Status:** FIXED  
+**Status:** FIXED
 **Perubahan:**
 - Menambahkan validasi di `src/pipeline.py` setelah audio loading
 - Mengecek `max_duration_minutes` dari config (default: 60 menit)
@@ -72,7 +72,7 @@ Beberapa linter warnings masih ada, tetapi ini adalah false positives:
 
 ## ✅ Status: SEMUA ISSUES PRIORITY 1 & 2 TELAH DIPERBAIKI
 
-**Waktu Perbaikan:** ~30 menit  
-**Files Modified:** 3 files  
-**Lines Changed:** ~100+ lines  
+**Waktu Perbaikan:** ~30 menit
+**Files Modified:** 3 files
+**Lines Changed:** ~100+ lines
 **Issues Fixed:** 4/4 (100%)

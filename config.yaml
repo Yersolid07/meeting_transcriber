@@ -6,7 +6,7 @@
 project:
   name: "Meeting Transcriber"
   version: "1.0.0"
-  author: "Nama Mahasiswa"
+  author: "Yermia Turangan"
   description: "Sistem Notulensi Rapat Otomatis berbasis SpeechBrain dan BERT"
 
 # Konfigurasi Audio
