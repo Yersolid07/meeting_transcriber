@@ -124,12 +124,28 @@ Untuk dokumentasi lengkap, lihat README.md
         type=str,
         choices=["deployment", "balanced", "fast", "accurate"],
         default="deployment",
-        help="Preset pipeline yang merekomendasikan konfigurasi (deployment = WhisperX large-v3-turbo int8)",
+        help="Preset pipeline yang merekomendasikan konfigurasi (default: deployment - prefer 'large-v3-turbo')",
     )
     misc_group.add_argument(
         "--quick-asr",
         action="store_true",
         help="Gunakan backend ASR lebih ringan/cepat (model kecil) jika memungkinkan (opsional override)",
+    )
+    misc_group.add_argument(
+        "--prefer-whisper-small",
+        action="store_true",
+        help="Paksa penggunaan `openai/whisper-small` untuk ASR (lebih cepat, lebih ringan)",
+    )
+    misc_group.add_argument(
+        "--cst-hz",
+        type=float,
+        default=None,
+        help="(opsional) Approximate Continuous Speech Tokenizer token rate in Hz (e.g., 7.5). Applies lossy compression preprocessor for speed.",
+    )
+    misc_group.add_argument(
+        "--diarization-compare",
+        action="store_true",
+        help="Jalankan perbandingan metode diarization (agglomerative vs spectral) selama evaluasi",
     )
     misc_group.add_argument(
         "--parallel-workers",
@@ -174,6 +190,12 @@ Untuk dokumentasi lengkap, lihat README.md
         "--reference-rttm", type=str, default=None, help="Path ke file RTTM untuk DER"
     )
     eval_group.add_argument(
+        "--reference-summary",
+        type=str,
+        default=None,
+        help="Path ke file reference summary untuk evaluasi ringkasan (ROUGE/BERTScore)",
+    )
+    eval_group.add_argument(
         "--condition",
         type=str,
         default="unknown",
@@ -185,15 +207,15 @@ Untuk dokumentasi lengkap, lihat README.md
     model_group.add_argument(
         "--asr-model",
         type=str,
-        default="models/whisper-large",
-        help="ASR model (HF model id / alias / path folder model lokal). Untuk WhisperX bisa isi path folder, mis: models/whisper-large",
+        default="large-v3-turbo",
+        help="ASR model (HF model id / alias / path folder model lokal). Default: large-v3-turbo for better accuracy.",
     )
     model_group.add_argument(
         "--asr-backend",
         type=str,
-        default="whisperx",
+        default="whisper",
         choices=["whisperx", "whisper", "transformers", "speechbrain"],
-        help="Backend ASR (default: whisperx)",
+        help="Backend ASR (default: whisper)",
     )
     model_group.add_argument(
         "--asr-language",
@@ -360,11 +382,34 @@ def run_evaluation(args, pipeline: MeetingTranscriberPipeline, result: PipelineR
         else:
             reference_diarization = parse_rttm_file(args.reference_rttm)
             print(f"Reference diarization loaded: {len(reference_diarization)} segments")
+    else:
+        # If user didn't provide an RTTM, try to find a *_vibevoice.rttm for the sample
+        try:
+            audio_stem = Path(args.audio).stem
+            cand = Path("data/ground_truth") / f"{audio_stem}_vibevoice.rttm"
+            if cand.exists():
+                reference_diarization = parse_rttm_file(str(cand))
+                print(f"Reference RTTM auto-loaded: {cand} ({len(reference_diarization)} segments)")
+        except Exception:
+            pass
+
+    # Load reference summary (optional)
+    reference_summary = None
+    if getattr(args, "reference_summary", None):
+        if not os.path.exists(args.reference_summary):
+            print(f"Warning: File reference summary tidak ditemukan: {args.reference_summary}")
+        else:
+            try:
+                reference_summary = Path(args.reference_summary).read_text(encoding="utf-8")
+                print(f"Reference summary loaded (len={len(reference_summary.split())} words)")
+            except Exception as e:
+                print(f"Warning: gagal membaca file summary: {e}")
 
     # Run evaluation
     eval_result = pipeline.evaluate(
         reference_transcript=reference_transcript,
         reference_diarization=reference_diarization,
+        reference_summary=reference_summary,
         sample_name=Path(args.audio).stem,
         condition=args.condition,
     )
@@ -378,11 +423,14 @@ def run_evaluation(args, pipeline: MeetingTranscriberPipeline, result: PipelineR
     wer_results = [eval_result.wer_result] if eval_result.wer_result else []
     der_results = [eval_result.der_result] if eval_result.der_result else []
 
+    # Pass evaluation metadata for reproducibility & documentation
     report = evaluator.generate_evaluation_report(
         wer_results=wer_results,
         der_results=der_results,
+        summary_results=[eval_result.summary_result] if eval_result.summary_result else None,
         sample_names=[eval_result.sample_name],
         condition_name=args.condition,
+        metadata=eval_result.metadata,
     )
 
     # Save report
@@ -429,6 +477,18 @@ def print_evaluation_results(eval_result: EvaluationResult):
         print(
             f"  Speaker Confusion : {der.speaker_confusion:.4f} ({der.speaker_confusion*100:.2f}%)"
         )
+
+    # Summary metrics (if available)
+    if eval_result.summary_result:
+        s = eval_result.summary_result
+        print("\nRingkasan (Summary) Evaluation:")
+        try:
+            print(f"  ROUGE-1 F1    : {s.rouge.get('rouge1_f', 0.0):.4f}")
+            print(f"  ROUGE-2 F1    : {s.rouge.get('rouge2_f', 0.0):.4f}")
+            print(f"  ROUGE-L F1    : {s.rouge.get('rougel_f', 0.0):.4f}")
+            print(f"  BERTScore F1  : {s.bertscore.get('bertscore_f1', 0.0):.4f}")
+        except Exception as e:
+            print(f"  (failed to print summary metrics: {e})")
 
 
 def print_batch_summary(
@@ -502,6 +562,9 @@ def main():
         save_intermediate=not args.no_save_intermediate,
         fast_mode=args.fast,
         quick_asr=args.quick_asr,
+        prefer_whisper_small=args.prefer_whisper_small,
+        cst_hz=args.cst_hz,
+        diarization_compare=args.diarization_compare,
         embedding_cache=not args.no_embedding_cache,
         target_speakers=args.target_speakers,
         # New flags

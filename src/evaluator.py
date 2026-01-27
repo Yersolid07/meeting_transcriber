@@ -81,6 +81,14 @@ class DERResult:
 
 
 @dataclass
+class SummaryResult:
+    """Summary evaluation result (ROUGE/BERTScore)"""
+
+    rouge: Dict[str, float]
+    bertscore: Dict[str, float]
+
+
+@dataclass
 class EvaluationResult:
     """Combined evaluation result"""
 
@@ -88,6 +96,7 @@ class EvaluationResult:
     condition: str
     wer_result: Optional[WERResult] = None
     der_result: Optional[DERResult] = None
+    summary_result: Optional[SummaryResult] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -444,6 +453,45 @@ class Evaluator:
         )
 
     # =========================================================================
+    # Summary evaluation (ROUGE, BERTScore)
+    # =========================================================================
+
+    def calculate_summary_metrics(self, reference: str, hypothesis: str) -> SummaryResult:
+        """Calculate ROUGE and BERTScore for summaries.
+
+        Returns a SummaryResult with compact numeric metrics (rouge1/2/l F1 and bertscore P/R/F1 average).
+        """
+        try:
+            import evaluate
+
+            rouge = evaluate.load("rouge")
+            bert = evaluate.load("bertscore")
+
+            # ROUGE expects lists
+            rouge_res = rouge.compute(predictions=[hypothesis], references=[reference])
+            # bertscore returns lists of precision/recall/f1
+            bert_res = bert.compute(predictions=[hypothesis], references=[reference], lang="id")
+
+            # pick common metrics
+            rouge_out = {
+                "rouge1_f": float(rouge_res.get("rouge1_f", 0.0)),
+                "rouge2_f": float(rouge_res.get("rouge2_f", 0.0)),
+                "rougel_f": float(rouge_res.get("rougeL_f", 0.0)),
+            }
+
+            bert_out = {
+                "bertscore_precision": float(bert_res.get("precision", [0.0])[0]),
+                "bertscore_recall": float(bert_res.get("recall", [0.0])[0]),
+                "bertscore_f1": float(bert_res.get("f1", [0.0])[0]),
+            }
+
+            return SummaryResult(rouge=rouge_out, bertscore=bert_out)
+        except Exception as e:
+            print(f"[Evaluator] Summary metric computation failed: {e}")
+            # fallback: empty metrics
+            return SummaryResult(rouge={}, bertscore={})
+
+    # =========================================================================
     # Report Generation
     # =========================================================================
 
@@ -451,8 +499,10 @@ class Evaluator:
         self,
         wer_results: List[WERResult],
         der_results: Optional[List[DERResult]] = None,
+        summary_results: Optional[List[SummaryResult]] = None,
         sample_names: Optional[List[str]] = None,
         condition_name: str = "Unknown",
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Generate formatted evaluation report for thesis.
@@ -462,6 +512,7 @@ class Evaluator:
             der_results: List of DER results (optional)
             sample_names: Names for each sample
             condition_name: Name of test condition
+            metadata: Optional dictionary of hyperparameters / tuning info used during the run
 
         Returns:
             Formatted report string
@@ -545,6 +596,50 @@ class Evaluator:
             lines.append("   Tidak ada data DER untuk dievaluasi.")
 
         lines.append("")
+        # Summary evaluation (ROUGE, BERTScore)
+        lines.append("3. EVALUASI RINGKASAN (Ringkasan/Abstraksi)")
+        lines.append("-" * 50)
+        if summary_results:
+            try:
+                avg_rouge1 = np.mean([r.rouge.get("rouge1_f", 0.0) for r in summary_results])
+                avg_rouge2 = np.mean([r.rouge.get("rouge2_f", 0.0) for r in summary_results])
+                avg_rougel = np.mean([r.rouge.get("rougel_f", 0.0) for r in summary_results])
+                avg_bertscore = np.mean([r.bertscore.get("bertscore_f1", 0.0) for r in summary_results])
+                lines.append(f"   Jumlah sampel      : {len(summary_results)}")
+                lines.append(f"   ROUGE-1 F1 (avg)   : {avg_rouge1:.4f}")
+                lines.append(f"   ROUGE-2 F1 (avg)   : {avg_rouge2:.4f}")
+                lines.append(f"   ROUGE-L F1 (avg)   : {avg_rougel:.4f}")
+                lines.append(f"   BERTScore F1 (avg) : {avg_bertscore:.4f}")
+            except Exception as e:
+                lines.append(f"   (summary metric aggregation failed: {e})")
+        else:
+            lines.append("   Tidak ada data ringkasan untuk dievaluasi.")
+
+        lines.append("")
+
+        # Include metadata/hyperparameters if provided
+        if metadata:
+            lines.append("4. CONFIGURATION & HYPERPARAMETERS")
+            lines.append("-" * 50)
+            try:
+                # Print metadata items in sorted order for consistency
+                for k in sorted(metadata.keys()):
+                    v = metadata[k]
+                    # For nested dicts, pretty-print a compact representation
+                    if isinstance(v, dict):
+                        if not v:
+                            lines.append(f"   - {k}: {{}}")
+                        else:
+                            lines.append(f"   - {k}:")
+                            for kk, vv in v.items():
+                                lines.append(f"       - {kk}: {vv}")
+                    else:
+                        lines.append(f"   - {k}: {v}")
+            except Exception as e:
+                lines.append(f"   - (metadata formatting failed: {e})")
+
+            lines.append("")
+
         lines.append("=" * 70)
         lines.append("Catatan:")
         lines.append(
@@ -592,6 +687,11 @@ class Evaluator:
                     "Missed_Speech",
                     "False_Alarm",
                     "Speaker_Confusion",
+                    # Summary metrics
+                    "ROUGE1_F",
+                    "ROUGE2_F",
+                    "ROUGEL_F",
+                    "BERTScore_F1",
                     "Duration_Sec",
                     "Num_Speakers_Ref",
                     "Num_Speakers_Hyp",
@@ -622,6 +722,11 @@ class Evaluator:
                     f"{der.missed_speech:.4f}" if der else "",
                     f"{der.false_alarm:.4f}" if der else "",
                     f"{der.speaker_confusion:.4f}" if der else "",
+                    # Summary metrics
+                    f"{result.summary_result.rouge.get('rouge1_f', ''):.4f}" if result.summary_result and result.summary_result.rouge else "",
+                    f"{result.summary_result.rouge.get('rouge2_f', ''):.4f}" if result.summary_result and result.summary_result.rouge else "",
+                    f"{result.summary_result.rouge.get('rougel_f', ''):.4f}" if result.summary_result and result.summary_result.rouge else "",
+                    f"{result.summary_result.bertscore.get('bertscore_f1', ''):.4f}" if result.summary_result and result.summary_result.bertscore else "",
                     f"{der.total_duration:.2f}" if der else "",
                     der.num_speakers_ref if der else "",
                     der.num_speakers_hyp if der else "",

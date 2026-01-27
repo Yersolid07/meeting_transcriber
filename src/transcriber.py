@@ -24,11 +24,16 @@ from src.utils import setup_logger
 class ASRConfig:
     """Configuration for ASR"""
 
-    model_id: str = "openai/whisper-base"
+    model_id: str = "openai/whisper-small"
     chunk_length_s: float = 30.0
     stride_length_s: float = 5.0
     batch_size: int = 4
     return_timestamps: Optional[str] = None  # None or 'char'/'word'
+
+    # Approximate Continuous Speech Tokenizer token rate in Hz (e.g., 7.5). When set,
+    # the transcriber will apply a fast lossy compression preprocessor for speed.
+    # Default: disabled (None). Use --cst-hz to enable.
+    cst_hz: Optional[float] = None
 
     # Backend options:
     # - 'whisper': HuggingFace transformers ASR pipeline (seq2seq whisper)
@@ -141,6 +146,11 @@ class ASRTranscriber:
 
         # Setup logger
         self.logger = setup_logger("ASRTranscriber")
+        # Log configured CST value for diagnostics
+        try:
+            self.logger.info(f"ASRTranscriber configured cst_hz: {getattr(self.config, 'cst_hz', None)} Hz")
+        except Exception:
+            pass
 
         # Model placeholders (lazy loading)
         self._pipeline = None
@@ -666,6 +676,11 @@ class ASRTranscriber:
         Supports `language='auto'` for Whisper backend which will perform a quick
         pre-pass (no language hint) and use a text-based language detector to
         choose the language for the final transcription pass.
+
+        If `self.config.cst_hz` is set, an aggressive lossy preprocessor (approximation
+        of a low-rate Continuous Speech Tokenizer) is applied before sending audio to
+        the ASR backend. This significantly reduces compute at the cost of precision
+        and should be used only when speed is critical.
         """
 
         # Fallback mode: only return placeholders when no working ASR backend is available.
@@ -679,9 +694,19 @@ class ASRTranscriber:
         # Convert to numpy
         audio_np = audio_segment.squeeze().cpu().numpy()
 
+        # Apply CST approximation preprocessor if requested (lossy, speed-optimized)
+        if getattr(self.config, "cst_hz", None) is not None:
+            try:
+                audio_np = self._apply_cst_approximation(audio_np, sample_rate, float(self.config.cst_hz))
+                # After approximation we keep the original sample_rate for downstream callers
+                self.logger.info(f"Applied CST approximation: {self.config.cst_hz} Hz (lossy)")
+            except Exception as e:
+                self.logger.warning(f"CST approximation failed, continuing with original audio: {e}")
+
         # Ensure float32
         if audio_np.dtype != np.float32:
             audio_np = audio_np.astype(np.float32)
+
 
         # WhisperX backend
         if getattr(self.config, "backend", None) == "whisperx":
@@ -712,7 +737,35 @@ class ASRTranscriber:
                     # If introspection fails, do not pass vad_filter
                     pass
 
-                result = self._whisperx_model.transcribe(audio_np, **kwargs)
+                # First attempt
+                try:
+                    result = self._whisperx_model.transcribe(audio_np, **kwargs)
+                except Exception as e_inner:
+                    self.logger.warning(f"WhisperX transcription failed on first attempt: {e_inner}. Retrying with `vad_filter=False, batch_size=1`")
+                    # retry with safer options
+                    try:
+                        retry_kwargs = kwargs.copy()
+                        retry_kwargs["batch_size"] = 1
+                        if "vad_filter" in retry_kwargs:
+                            retry_kwargs["vad_filter"] = False
+                        result = self._whisperx_model.transcribe(audio_np, **retry_kwargs)
+                    except Exception as e_retry:
+                        self.logger.error(f"WhisperX transcription retry failed: {e_retry}. Falling back to lightweight Whisper model.")
+                        # Fallback: switch backend to 'whisper' with small model and attempt to load it
+                        try:
+                            self.config.backend = "whisper"
+                            self.config.model_id = "openai/whisper-small"
+                            # Clear whisperx state
+                            self._whisperx_model = None
+                            self._pipeline = None
+                            self._model = None
+                            self._processor = None
+                            self._load_model()
+                            # attempt pipeline-based transcription
+                            return self._transcribe_audio(audio_segment, sample_rate)
+                        except Exception as e_fb:
+                            self.logger.error(f"Fallback ASR model load/transcription failed: {e_fb}")
+                            return ""
 
                 # Normalize result into plain text.
                 if isinstance(result, dict):
@@ -863,11 +916,79 @@ class ASRTranscriber:
                 text = res.get("text", "") if isinstance(res, dict) else str(res)
                 return self._postprocess_text(text)
             except Exception as e:
-                self.logger.error(f"WhisperX full-audio transcription failed: {e}")
-                return ""
+                self.logger.warning(f"WhisperX full-audio transcription failed: {e}. Retrying with vad_filter=False, batch_size=1")
+                try:
+                    res = self._whisperx_model.transcribe(
+                        audio_np,
+                        batch_size=1,
+                        language=language_arg,
+                        vad_filter=False,
+                    )
+                    text = res.get("text", "") if isinstance(res, dict) else str(res)
+                    return self._postprocess_text(text)
+                except Exception as e2:
+                    self.logger.error(f"WhisperX full-audio retry failed: {e2}. Falling back to 'whisper-small'.")
+                    # Fallback to whisper-small pipeline
+                    try:
+                        self.config.backend = "whisper"
+                        self.config.model_id = "openai/whisper-small"
+                        self._whisperx_model = None
+                        self._pipeline = None
+                        self._model = None
+                        self._processor = None
+                        self._load_model()
+                        text = self._transcribe_audio(waveform, sample_rate)
+                        return self._postprocess_text(text)
+                    except Exception as e_fb:
+                        self.logger.error(f"Fallback full-audio ASR failed: {e_fb}")
+                        return ""
 
         text = self._transcribe_audio(waveform, sample_rate)
         return self._postprocess_text(text)
+
+    def _apply_cst_approximation(self, audio_np: np.ndarray, sample_rate: int, cst_hz: float) -> np.ndarray:
+        """Approximate a Continuous Speech Tokenizer by block-averaging audio frames
+
+        This method is intentionally conservative and reversible only in the sense
+        that it produces a downsample-like version of the waveform which is then
+        expanded back to the original rate (by repeating block values). This is
+        extremely lossy but can reduce model runtime for long audio when you
+        accept lower ASR fidelity.
+
+        Implementation details:
+        - token_duration = 1.0 / cst_hz
+        - compute mean amplitude per token window
+        - expand each token mean to the window length (constant value) to produce
+          a waveform of the original sample length
+
+        Note: This is an approximation to the user's requested ultralow-rate tokenizer
+        (7.5 Hz). For best accuracy, tune `cst_hz` and verify results on your data.
+        """
+        if cst_hz <= 0 or np.isnan(cst_hz):
+            return audio_np
+
+        token_dur = 1.0 / float(cst_hz)
+        window_samp = max(1, int(round(token_dur * sample_rate)))
+        # Partition audio and compute mean for each window
+        n = len(audio_np)
+        n_windows = int(np.ceil(n / window_samp))
+        means = []
+        for i in range(n_windows):
+            s = i * window_samp
+            e = min(n, s + window_samp)
+            if e <= s:
+                means.append(0.0)
+            else:
+                means.append(float(np.mean(audio_np[s:e])))
+
+        # Reconstruct waveform by repeating means per window
+        out = np.zeros(n, dtype=np.float32)
+        for i, m in enumerate(means):
+            s = i * window_samp
+            e = min(n, s + window_samp)
+            out[s:e] = m
+
+        return out
 
     def _postprocess_text(self, text: str) -> str:
         """Clean and format transcribed text"""

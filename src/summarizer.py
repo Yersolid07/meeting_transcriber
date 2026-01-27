@@ -20,14 +20,15 @@ class SummarizationConfig:
     """Configuration for summarization"""
 
     # Method: 'extractive' (BERT embeddings) or 'abstractive' (seq2seq model)
-    method: str = "extractive"
+    method: str = "abstractive"
 
     # Models
+    # Use a cached/available model for reliability in offline environments
     sentence_model_id: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     abstractive_model_id: str = "google/mt5-small"
 
-    # Extractive settings
-    num_sentences: int = 5
+    # Extractive settings (increase to capture more key points)
+    num_sentences: int = 7
     min_sentence_length: int = 6
     max_sentence_length: int = 300
 
@@ -35,6 +36,10 @@ class SummarizationConfig:
     max_input_chars: int = 1000
     max_summary_length: int = 128
     min_summary_length: int = 30
+
+    # Light abstractive refinement step (run on condensed extractive overview)
+    do_abstractive_refinement: bool = True
+    abstractive_refine_max_len: int = 80
 
     # Scoring weights
     position_weight: float = 0.15
@@ -370,6 +375,26 @@ class BERTSummarizer:
 
         # Generate a multi-sentence overview with some ordering and cleaning
         overview = self._generate_overview(key_sentences[:3])
+
+        # Optionally perform a light abstractive refinement on the extractive overview
+        if getattr(self.config, "do_abstractive_refinement", False):
+            try:
+                abs_sum = AbstractiveSummarizer(self.config)
+                abs_sum._load_model()
+                if abs_sum._pipeline is not None and overview:
+                    out = abs_sum._pipeline(
+                        overview,
+                        max_length=getattr(self.config, "abstractive_refine_max_len", 80),
+                        min_length=30,
+                        truncation=True,
+                        do_sample=False,
+                    )
+                    # Expect a single summary text
+                    if isinstance(out, list) and out:
+                        overview = out[0].get("summary_text", overview).strip()
+            except Exception:
+                # Fail silently and use extractive overview
+                pass
 
         # Build richer key points: include speaker attribution and short cleaned sentences
         key_points = []
