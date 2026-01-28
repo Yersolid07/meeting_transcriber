@@ -95,7 +95,11 @@ def synthetic_per_segment_benchmark():
         print(f"Parallel time: {parallel_time:.2f}s")
         print(f"Speedup      : {serial_time / parallel_time:.2f}x")
 
-        return {"serial_time": serial_time, "parallel_time": parallel_time, "speedup": serial_time / parallel_time}
+        return {
+            "serial_time": serial_time,
+            "parallel_time": parallel_time,
+            "speedup": serial_time / parallel_time,
+        }
     start = time.perf_counter()
     out1 = t1.transcribe_segments(waveform, segments, sample_rate=sr)
     serial_time = time.perf_counter() - start
