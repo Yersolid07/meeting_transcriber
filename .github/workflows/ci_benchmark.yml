@@ -19,6 +19,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Install CPU build of PyTorch first to ensure a compatible wheel is available on GitHub runners
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
 
       - name: Run tests
