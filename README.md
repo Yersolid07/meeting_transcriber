@@ -390,6 +390,29 @@ DER (Diarization Error Rate): 12.5%
   - Speaker Error: 3.2%
 ```
 
+### Summary Evaluation (ROUGE & BERTScore)
+
+Ringkasan rapat yang dihasilkan juga bisa dievaluasi bila Anda menyediakan file reference summary. Pipeline akan menghitung metrik **ROUGE** (1/2/L F1) dan **BERTScore** (P/R/F1) dan menyertakannya dalam laporan evaluasi.
+
+Contoh penggunaan:
+
+```bash
+python main.py --audio rapat.wav \
+  --evaluate \
+  --reference-summary reference_summary.txt
+```
+
+Catatan penting:
+
+- Dependensi: perhitungan ROUGE/BERTScore menggunakan paket `evaluate` (yang memerlukan `rouge_score`, `absl-py`, dan `bert-score`). Jika paket ini tidak tersedia, evaluasi ringkasan akan *gracefully fall back* (akan melaporkan metrik kosong) — evaluasi WER/DER tetap berjalan.
+- Normalisasi teks: ROUGE sensitif terhadap tokenisasi/normalisasi. Jika Anda mendapatkan nilai ROUGE = 0.0, kemungkinan besar ada mismatch normalisasi antara referensi dan sistem (huruf kapital, tanda baca, atau tokenisasi berbeda). Solusi:
+  - Pastikan referensi dan hasil ringkasan dalam **lowercase** dan bebas dari karakter khusus yang tidak perlu.
+  - Gunakan util `scripts/evaluate_whisper.py` `normalize_text()` sebagai contoh fungsi normalisasi.
+  - Trim whitespace berlebih dan pastikan pengkodean UTF-8.
+- Tip praktis: buat file `reference_summary.txt` dengan ringkasan 1–3 paragraf (atau 3–7 kalimat) yang merepresentasikan poin penting rapat.
+
+Output evaluasi summary akan muncul di laporan evaluasi yang di-save di folder `--output` dan juga dimasukkan ke CSV ringkasan evaluasi jika dijalankan pada banyak sample.
+
 ## 🐛 Troubleshooting
 
 ### Windows - SpeechBrain Symlink Error
