@@ -50,7 +50,8 @@ class DiarizationConfig:
 
     # Collapse heuristics
     collapse_threshold: float = 0.15
-    silhouette_collapse_threshold: float = 0.05
+    # When negative, do not automatically collapse clusters to a single speaker based on silhouette.
+    silhouette_collapse_threshold: float = -1.0
 
     # Iterative merging (centroid-based)
     iterative_merge_threshold: float = 0.15
@@ -906,9 +907,15 @@ class SpeakerDiarizer:
             return embeddings
 
     def _cluster_embeddings(
-        self, embeddings: np.ndarray, num_speakers: Optional[int] = None
+        self, embeddings: np.ndarray, num_speakers: Optional[int] = None, method_override: Optional[str] = None
     ) -> np.ndarray:
-        """Cluster embeddings to assign speaker labels, with small-cluster merging."""
+        """Cluster embeddings to assign speaker labels, with small-cluster merging.
+
+        Args:
+            embeddings: (N, D) array of embeddings
+            num_speakers: Optional target number of speakers
+            method_override: If set, use this clustering method ('agglomerative','spectral','kmeans')
+        """
         if len(embeddings) < 2:
             return np.zeros(len(embeddings), dtype=int)
 
@@ -917,7 +924,14 @@ class SpeakerDiarizer:
         embeddings_norm = scaler.fit_transform(embeddings)
 
         # Support both nested (Config.diarization.clustering) and flat config shapes
-        if hasattr(self.config, "clustering"):
+        if method_override is not None:
+            method = method_override
+            # default thresholds - allow config overrides below
+            threshold = getattr(self.config, "clustering_threshold", 0.7)
+            linkage = getattr(self.config, "clustering_linkage", "average")
+            min_size_cfg = getattr(self.config, "min_cluster_size", 2)
+            max_speakers_cfg = getattr(self.config, "max_speakers", None)
+        elif hasattr(self.config, "clustering"):
             method = self.config.clustering.method
             threshold = self.config.clustering.threshold
             linkage = self.config.clustering.linkage
@@ -940,12 +954,38 @@ class SpeakerDiarizer:
                     n_clusters=num_speakers, metric="cosine", linkage=linkage
                 )
             else:
-                clustering = AgglomerativeClustering(
-                    n_clusters=None,
-                    distance_threshold=threshold,
-                    metric="cosine",
-                    linkage=linkage,
-                )
+                # If no target provided, estimate number of speakers via silhouette search
+                est_max = min(8, max(2, len(embeddings) // 2))
+                est_min = 2
+                best_k = None
+                best_score = -1.0
+                # Only try silhouette search on reasonably-sized inputs
+                if len(embeddings) >= 8:
+                    for k in range(est_min, est_max + 1):
+                        try:
+                            tmp = AgglomerativeClustering(n_clusters=k, metric="cosine", linkage=linkage)
+                            labels_tmp = tmp.fit_predict(embeddings_norm)
+                            # silhouette requires at least 2 clusters and < n_samples clusters
+                            if len(np.unique(labels_tmp)) > 1 and len(np.unique(labels_tmp)) < len(embeddings):
+                                score = silhouette_score(embeddings_norm, labels_tmp, metric="cosine")
+                            else:
+                                score = -1.0
+                        except Exception:
+                            score = -1.0
+                        if score > best_score:
+                            best_score = score
+                            best_k = k
+                # If silhouette search found a sensible k use it; else fallback to threshold style
+                if best_k is not None and best_score > 0.01:
+                    clustering = AgglomerativeClustering(n_clusters=best_k, metric="cosine", linkage=linkage)
+                    self.logger.info(f"Agglomerative autodetected k={best_k} (silhouette={best_score:.3f})")
+                else:
+                    clustering = AgglomerativeClustering(
+                        n_clusters=None,
+                        distance_threshold=threshold,
+                        metric="cosine",
+                        linkage=linkage,
+                    )
 
         elif method == "spectral":
             n_clusters = num_speakers or min(8, len(embeddings) // 2)

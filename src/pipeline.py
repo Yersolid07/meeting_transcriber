@@ -60,8 +60,9 @@ class PipelineConfig:
     target_speakers: Optional[int] = None
 
     # ASR settings
-    asr_model_id: str = "indonesian-nlp/wav2vec2-large-xlsr-indonesian"
-    asr_backend: str = "whisper"  # whisper|transformers|whisperx|speechbrain
+    # Default to Whisper Large v3 Turbo for better accuracy (may be slower)
+    asr_model_id: str = "large-v3-turbo"
+    asr_backend: str = "whisperx"  # whisperx preferred for Large models
     asr_language: str = "id"
     whisperx_compute_type: str = "auto"
     whisperx_vad_filter: bool = True
@@ -82,7 +83,17 @@ class PipelineConfig:
     embedding_cache: bool = True  # cache diarization embeddings to disk
 
     # Preset mode (deployment = recommended default for production: WhisperX large-v3-turbo int8)
-    preset: str = "deployment"  # choices: deployment|balanced|fast|accurate
+    # Set default to 'fast' to prefer lightweight models (whisper-small) and avoid heavy WhisperX defaults
+    preset: str = "fast"  # choices: deployment|balanced|fast|accurate
+
+    # Quick ASR options
+    prefer_whisper_small: bool = True
+    # Approximate Continuous Speech Tokenizer token rate in Hz (e.g., 7.5). When set,
+    # ASR will apply a lossy preprocessor to compress audio for speed. Use with care.
+    cst_hz: Optional[float] = 7.5
+
+    # Compare diarization methods during evaluation
+    diarization_compare: bool = False
 
     # Allow explicit override for ASR parallel workers (None = auto)
     asr_parallel_workers: Optional[int] = None  # override for per-segment ASR parallelism
@@ -201,9 +212,13 @@ class MeetingTranscriberPipeline:
         self._diarization_segments = None
         self._transcript_segments = None
         self._summary = None
+        # Diarization tuning result (if autotune was run)
+        self._diarization_tune_result = None
 
         if self.config.verbose:
             self._log(f"Pipeline initialized with device: {self.config.device}")
+            # Log effective CST value for diagnostics
+            self._log(f"Pipeline effective cst_hz: {getattr(self.config, 'cst_hz', None)} Hz")
 
     # =========================================================================
     # Properties (Lazy Loading)
@@ -281,21 +296,22 @@ class MeetingTranscriberPipeline:
                     asr_cfg.parallel_workers = min(8, max(1, (os.cpu_count() or 4) - 1))
                 except Exception:
                     pass
-            elif getattr(self.config, "quick_asr", False):
-                # Enable quick ASR settings if pipeline asked for it
+            elif getattr(self.config, "quick_asr", False) or getattr(self.config, "prefer_whisper_small", False):
+                # Quick/Lightweight ASR: prefer Whisper small for speed and low memory
                 try:
-                    # Use Whisper small model for seq2seq speed, unless user forced whisperx
-                    if getattr(self.config, "asr_backend", "whisperx") == "whisperx":
-                        asr_cfg.model_id = "openai/whisper-small"
-                        asr_cfg.backend = "whisper"
-                    else:
-                        asr_cfg.model_id = "openai/whisper-small"
-                    # Use full-audio single-pass mapping for speed
-                    asr_cfg.use_full_audio_for_segments = True
-                    # Increase parallel workers conservatively
+                    asr_cfg.model_id = "openai/whisper-small"
+                    asr_cfg.backend = "whisper"
+                    # For speed, avoid the costly full-audio alignment step
+                    asr_cfg.use_full_audio_for_segments = False
+                    # Increase parallel workers conservatively for per-segment transcription
                     import os
 
                     asr_cfg.parallel_workers = min(8, max(1, (os.cpu_count() or 4) - 1))
+                    # Larger chunk lengths reduce per-chunk overhead (helps CPU-bound runs)
+                    asr_cfg.chunk_length_s = max(asr_cfg.chunk_length_s, 60.0)
+                    # If Pipeline requested CST approximation, propagate to ASR config
+                    if getattr(self.config, "cst_hz", None) is not None:
+                        asr_cfg.cst_hz = float(self.config.cst_hz)
                 except Exception:
                     pass
 
@@ -424,10 +440,13 @@ class MeetingTranscriberPipeline:
         if getattr(self.config, "tune_diarization", False):
             self._log("Tuning diarization hyperparameters...")
             try:
-                self.diarizer.auto_tune(
+                tune_res = self.diarizer.auto_tune(
                     self._waveform, self._sample_rate, num_speakers=num_speakers
                 )
+                # store tuning result for later reporting
+                self._diarization_tune_result = tune_res or {}
             except Exception as e:
+                self._diarization_tune_result = {}
                 self._log(f"Diarization tuning failed (continuing with defaults): {e}")
 
         with Timer("Diarization"):
@@ -625,6 +644,7 @@ class MeetingTranscriberPipeline:
         self,
         reference_transcript: Optional[str] = None,
         reference_diarization: Optional[List[Tuple[str, float, float]]] = None,
+        reference_summary: Optional[str] = None,
         sample_name: str = "sample",
         condition: str = "unknown",
     ) -> EvaluationResult:
@@ -634,11 +654,12 @@ class MeetingTranscriberPipeline:
         Args:
             reference_transcript: Ground truth transcript text
             reference_diarization: Ground truth diarization [(speaker, start, end), ...]
+            reference_summary: Ground truth summary text (for summary evaluation)
             sample_name: Name for this sample
             condition: Test condition name
 
         Returns:
-            EvaluationResult with WER and DER
+            EvaluationResult with WER, DER, and optional summary metrics
         """
         wer_result = None
         der_result = None
@@ -692,11 +713,100 @@ class MeetingTranscriberPipeline:
                     self._log(f"Auto-alignment for RTTM failed: {e}")
                     pass
 
+        # Summary evaluation (if reference_summary provided)
+        summary_result = None
+        if reference_summary and self._summary:
+            try:
+                # Prefer overview text if available, otherwise join key points
+                hyp_summary = getattr(self._summary, "overview", "") or " ".join(getattr(self._summary, "key_points", []))
+                summary_result = self.evaluator.calculate_summary_metrics(reference_summary, hyp_summary)
+                self._log(
+                    f"Summary metrics - ROUGE1_F: {summary_result.rouge.get('rouge1_f', 0.0):.4f}, BERTScore_F1: {summary_result.bertscore.get('bertscore_f1', 0.0):.4f}"
+                )
+            except Exception as e:
+                self._log(f"Summary evaluation failed: {e}")
+
+        # Build evaluation metadata: include relevant hyperparameters and tuning info
+        metadata: Dict[str, Any] = {}
+
+        try:
+            # ASR config
+            asr_cfg = getattr(self.transcriber, "config", None)
+            if asr_cfg is not None:
+                metadata["asr_backend"] = getattr(asr_cfg, "backend", None)
+                metadata["asr_model_id"] = getattr(asr_cfg, "model_id", None)
+                metadata["asr_language"] = getattr(asr_cfg, "language", None)
+                metadata["asr_use_full_audio_for_segments"] = getattr(
+                    asr_cfg, "use_full_audio_for_segments", None
+                )
+                metadata["asr_whisperx_compute_type"] = getattr(asr_cfg, "whisperx_compute_type", None)
+                metadata["asr_whisperx_vad_filter"] = getattr(asr_cfg, "whisperx_vad_filter", None)
+                metadata["asr_parallel_workers"] = getattr(asr_cfg, "parallel_workers", None)
+        except Exception:
+            pass
+
+        try:
+            dz_cfg = getattr(self.diarizer, "config", None)
+            if dz_cfg is not None:
+                # pick a sensible subset of diarizer params
+                metadata["diarizer_vad_threshold"] = getattr(dz_cfg, "vad_threshold", None)
+                metadata["diarizer_min_speech_duration"] = getattr(dz_cfg, "min_speech_duration", None)
+                metadata["diarizer_segment_window"] = getattr(dz_cfg, "segment_window", None)
+                metadata["diarizer_segment_hop"] = getattr(dz_cfg, "segment_hop", None)
+                metadata["diarizer_clustering_method"] = getattr(dz_cfg, "clustering_method", None)
+                metadata["diarizer_clustering_threshold"] = getattr(dz_cfg, "clustering_threshold", None)
+                metadata["diarizer_min_cluster_size"] = getattr(dz_cfg, "min_cluster_size", None)
+                metadata["diarizer_iterative_merge_threshold"] = getattr(
+                    dz_cfg, "iterative_merge_threshold", None
+                )
+                metadata["diarizer_target_num_speakers"] = getattr(dz_cfg, "target_num_speakers", None)
+                metadata["diarizer_target_force_threshold"] = getattr(dz_cfg, "target_force_threshold", None)
+                metadata["diarizer_merge_gap_threshold"] = getattr(dz_cfg, "merge_gap_threshold", None)
+                metadata["diarizer_use_fast_embedding"] = getattr(dz_cfg, "use_fast_embedding", None)
+                metadata["diarizer_embedding_model_id"] = getattr(dz_cfg, "embedding_model_id", None)
+        except Exception:
+            pass
+
+        metadata["tune_diarization_requested"] = bool(getattr(self.config, "tune_diarization", False))
+        metadata["diarization_tune_result"] = self._diarization_tune_result or {}
+
+        # Reference information
+        metadata["reference_transcript_provided"] = bool(reference_transcript)
+        metadata["reference_diarization_provided"] = bool(reference_diarization)
+        metadata["used_derived_rttm"] = bool("derived_ref" in locals() and derived_ref)
+
+        # Optional diarization method comparison (agglomerative vs spectral)
+        if getattr(self.config, "diarization_compare", False) and reference_diarization:
+            try:
+                # Recompute speech regions/windows/embeddings for re-clustering
+                speech_regions = self.diarizer._detect_speech(self._waveform, self._sample_rate)
+                windows = self.diarizer._create_windows(speech_regions)
+                embeddings = self.diarizer._extract_embeddings(
+                    self._waveform, windows, self._sample_rate, cache_dir=self.config.cache_dir, audio_id=Path(sample_name).stem
+                )
+
+                comp_results = {}
+                for method in ("agglomerative", "spectral"):
+                    try:
+                        labels = self.diarizer._cluster_embeddings(embeddings, num_speakers=None, method_override=method)
+                        hyp_segments = self.diarizer._create_segments(windows, labels, embeddings)
+                        hyp_rttm = [(s.speaker_id, s.start, s.end) for s in hyp_segments]
+                        der_res = self.evaluator.calculate_der(reference_diarization, hyp_rttm)
+                        comp_results[method] = der_res.to_dict()
+                    except Exception as e:
+                        comp_results[method] = {"error": str(e)}
+
+                metadata["diarization_comparison"] = comp_results
+            except Exception as e:
+                self._log(f"Diarization comparison failed: {e}")
+
         return EvaluationResult(
             sample_name=sample_name,
             condition=condition,
             wer_result=wer_result,
             der_result=der_result,
+            summary_result=summary_result,
+            metadata=metadata,
         )
 
     # =========================================================================

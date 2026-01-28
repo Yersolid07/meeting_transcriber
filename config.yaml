@@ -39,7 +39,7 @@ diarization:
 
   # Clustering
   clustering:
-    method: "spectral"  # agglomerative, spectral, kmeans
+    method: "agglomerative"  # agglomerative, spectral, kmeans
     threshold: 0.7
     min_cluster_size: 2
     linkage: "average"
