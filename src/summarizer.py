@@ -12,6 +12,22 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+
+def _collapse_repeated_phrases_global(text: str, max_ngram: int = 6, min_repeats: int = 2) -> str:
+    """Module-level helper to collapse repeated n-gram phrases.
+
+    Iteratively collapses repeated adjacent n-gram phrases into a single occurrence.
+    """
+    if not text or min_repeats < 2:
+        return text
+    pattern = re.compile(r"(\b(?:\w+\s+){0,%d}\w+\b)(?:\s+\1){%d,}" % (max_ngram - 1, min_repeats - 1), flags=re.IGNORECASE)
+    prev = None
+    out = text
+    while prev != out:
+        prev = out
+        out = pattern.sub(r"\1", out)
+    return out
+
 from src.transcriber import TranscriptSegment
 
 
@@ -25,7 +41,7 @@ class SummarizationConfig:
     # Models
     # Use a cached/available model for reliability in offline environments
     sentence_model_id: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    abstractive_model_id: str = "google/mt5-small"
+    abstractive_model_id: str = "google/mt5-base"
 
     # Extractive settings (increase to capture more key points)
     num_sentences: int = 7
@@ -40,6 +56,14 @@ class SummarizationConfig:
     # Light abstractive refinement step (run on condensed extractive overview)
     do_abstractive_refinement: bool = True
     abstractive_refine_max_len: int = 80
+
+    # Generate a comprehensive executive overview (long, covering entire meeting)
+    comprehensive_overview: bool = True
+    comprehensive_max_length: int = 512
+
+    # Post-processing options
+    polish_overview: bool = True
+    semantic_dedup_threshold: float = 0.75
 
     # Scoring weights
     position_weight: float = 0.15
@@ -115,6 +139,7 @@ class MeetingSummary:
             "decisions": self.decisions,
             "action_items": self.action_items,
             "topics": self.topics,
+            "keywords": getattr(self, "keywords", []),
         }
 
     def __str__(self) -> str:
@@ -140,9 +165,34 @@ class MeetingSummary:
             for i, item in enumerate(self.action_items, 1):
                 owner = item.get("owner", "TBD")
                 task = item.get("task", "")
-                lines.append(f"  {i}. [{owner}] {task}")
+                due = item.get("due", "")
+                if due:
+                    lines.append(f"  {i}. [{owner}] {task} (Due: {due})")
+                else:
+                    lines.append(f"  {i}. [{owner}] {task}")
+
+        if self.topics:
+            lines.append("")
+            lines.append("Topik:")
+            lines.append(", ".join(self.topics))
 
         return "\n".join(lines)
+
+    def to_json(self) -> str:
+        """Return a JSON string for machine-readable outputs."""
+        import json
+
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
+    def to_yaml(self) -> str:
+        """Return a YAML string (requires PyYAML)."""
+        try:
+            import yaml
+
+            return yaml.safe_dump(self.to_dict(), allow_unicode=True)
+        except Exception:
+            # Fallback to JSON if YAML not available
+            return self.to_json()
 
 
 class AbstractiveSummarizer:
@@ -185,27 +235,536 @@ class AbstractiveSummarizer:
                 cut = end
             chunk = text[start:cut].strip()
             if chunk:
+                # prevent repeating identical chunks
+                chunk = self._collapse_repeated_phrases(chunk)
                 chunks.append(chunk)
             start = cut
         return chunks
 
+    def _clean_abstractive_output(self, overview: str, full_text: str) -> (str, List[str]):
+        """Clean artifacts from abstractive model output and produce fallback key points.
+
+        Returns (overview_clean, key_points)
+        """
+        overview_clean = self._clean_abstractive_text(overview)
+
+        # If abstract output is still noisy (placeholders remain or too few alpha tokens), fallback to extractive
+        if "<extra_id" in overview or len(re.findall(r"[a-zA-Z]{2,}", overview_clean)) < 10 or re.search(r"\b(\w+)(?:\s+\1){2,}", overview_clean.lower()):
+            sentences = BERTSummarizer(self.config)._split_sentences(full_text)
+            key_points = [s for s in sentences[: self.config.num_sentences]]
+            overview_clean = " ".join(key_points[:3])
+            return overview_clean, key_points
+
+        # Otherwise make sure key points are meaningful and deduplicated
+        parts = [s.strip() for s in re.split(r"\.|!|\?", overview_clean) if s.strip()]
+        seen_kp = set()
+        key_points: List[str] = []
+        for p in parts:
+            p_clean = re.sub(r"[^\w\s]", "", p) if p else p
+            p_clean = re.sub(r"\s+", " ", p_clean).strip()
+            if len(p_clean.split()) < 3:
+                continue
+            low = p_clean.lower()
+            if low in seen_kp:
+                continue
+            seen_kp.add(low)
+            key_points.append(p_clean)
+            if len(key_points) >= self.config.num_sentences:
+                break
+
+        return overview_clean, key_points
+
     def _clean_abstractive_text(self, text: str) -> str:
-        """Clean artefacts from abstractive summarizer outputs (remove sentinel tokens, collapse punctuation, whitespace)"""
+        """Lightweight cleaning of abstractive text outputs (remove placeholders, collapse punctuation).
+
+        Kept as a separate method for unit testing/backwards compatibility with older tests.
+        Also collapses repeated trivial tokens and reduces punctuation runs.
+        """
+        t = re.sub(r"<extra_id_\d+>", "", text)
+        t = re.sub(r"\)\s*<extra_id_\d+>", "", t)
+        # collapse repeated short filler words sequences e.g. "Jadi contohnya Jadi contohnya ..."
+        t = self._collapse_repeated_phrases(t)
+        t = re.sub(r"\s*[\.]{2,}\s*", ". ", t)
+        t = re.sub(r"[!?]{2,}", ".", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        # Remove leading/trailing hyphens and stray punctuation
+        t = re.sub(r"^[-\s]+|[-\s]+$", "", t)
+        if not re.search(r"[.!?]$", t):
+            t = t + "."
+        return t
+
+    def _generate_keywords(self, text: str, top_k: int = 8) -> List[str]:
+        """Generate simple keywords by frequency (fallback)."""
+        toks = re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
+        freq = {}
+        stop = {"yang","dan","ini","itu","untuk","dengan","juga","sudah","ada","kita","saya","kamu"}
+        for w in toks:
+            if w in stop:
+                continue
+            freq[w] = freq.get(w, 0) + 1
+        sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+        return [w for w, _ in sorted_words[:top_k]]
+
+    def _collapse_repeated_phrases(self, text: str, max_ngram: int = 6, min_repeats: int = 2) -> str:
+        """Delegates to module-level collapse helper"""
+        return _collapse_repeated_phrases_global(text, max_ngram=max_ngram, min_repeats=min_repeats)
+
+    def _semantic_deduplicate(self, items: List[str], threshold: Optional[float] = None) -> List[str]:
+        """Delegate to AbstractiveSummarizer's semantic dedupe for compatibility."""
+        return AbstractiveSummarizer(self.config)._semantic_deduplicate(items, threshold)
+
+    def _semantic_dedup_action_items(self, actions: List[Dict[str, str]], threshold: Optional[float] = None) -> List[Dict[str, str]]:
+        """Delegate to AbstractiveSummarizer's action-item dedupe for compatibility."""
+        return AbstractiveSummarizer(self.config)._semantic_dedup_action_items(actions, threshold)
+
+    def _parse_structured_output(self, raw: str, defaults: Dict[str, Any]) -> (str, List[str]):
+        """Try to parse YAML/JSON or simple structured text into (overview, keywords).
+
+        If parsing fails, return (cleaned_raw, fallback_keywords)
+        """
+        cleaned = raw.strip()
+
+        # Try YAML first (if available)
+        try:
+            import yaml
+
+            parsed = yaml.safe_load(cleaned)
+            if isinstance(parsed, dict):
+                ov = parsed.get("overview", "")
+                kws = parsed.get("keywords", None)
+                if kws is None:
+                    kws = self._generate_keywords(ov or " ".join(defaults.get("key_points", [])))
+                return (ov.strip() if isinstance(ov, str) else "", kws)
+        except Exception:
+            pass
+
+        # Try JSON
+        try:
+            import json
+
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                ov = parsed.get("overview", "")
+                kws = parsed.get("keywords", None)
+                if kws is None:
+                    kws = self._generate_keywords(ov or " ".join(defaults.get("key_points", [])))
+                return (ov.strip() if isinstance(ov, str) else "", kws)
+        except Exception:
+            pass
+
+        # Simple heuristic: look for header 'overview:' or 'Ringkasan:' in text
+        m = re.search(r"(?im)^(overview|ringkasan)\s*:\s*(.*)$", cleaned)
+        if m:
+            ov = m.group(2).strip()
+            kws = self._generate_keywords(ov or " ".join(defaults.get("key_points", [])))
+            return ov, kws
+
+        # If nothing recognized, return fallback cleaned text and keywords
+        return cleaned, self._generate_keywords(cleaned or " ".join(defaults.get("key_points", [])))
+
+    def _sanitize_for_prompt(self, text: str) -> str:
+        """Sanitize text before injecting into the prompt: remove model placeholders, URLs/domains/emails,
+        common web-article boilerplate (closing lines like "Semoga bermanfaat"), and collapse repeats."""
         if not text:
             return text
-        # Remove T5-style sentinel tokens like <extra_id_0>
-        text = re.sub(r"<extra_id_\d+>", "", text)
-        # Collapse multiple whitespace
-        text = re.sub(r"\s+", " ", text).strip()
-        # Normalize repeated ellipsis and punctuation
-        text = re.sub(r"\.{3,}", "...", text)
-        text = re.sub(r"([!?]){2,}", r"\1", text)
-        # Remove space before punctuation
-        text = re.sub(r"\s+([.,;:!?])", r"\1", text)
-        # Ensure it ends with sentence punctuation
-        if not re.search(r"[.!?]$", text):
-            text = text + "."
-        return text
+        t = re.sub(r"<extra_id_\d+>", "", text)
+        # remove emails
+        t = re.sub(r"\b\S+@\S+\.\S+\b", " ", t)
+        # remove domain-like tokens (e.g., Eksekutif.com.co.id)
+        t = re.sub(r"\b\S+\.(?:com|co\.id|info|id|net|org)(?:\.[a-z]{2,})*\b", " ", t, flags=re.IGNORECASE)
+        # remove common article/web boilerplate short phrases that often appear as closings
+        t = re.sub(r"(?i)\b(semoga artikel ini bermanfaat(?: bagi anda semua)?|semoga bermanfaat|terima kasih(?: atas masukannya| juga)?)\b[.!\s,]*", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        t = _collapse_repeated_phrases_global(t)
+        return t
+
+    def _is_repetitive_text(self, text: str, max_run: int = 6) -> bool:
+        """Detect highly repetitive model outputs (including repeated n-gram phrases).
+
+        Returns True if repetition patterns exceed thresholds.
+        """
+        if not text:
+            return False
+        # check placeholder presence quickly
+        if re.search(r"<extra_id_\d+>", text):
+            return True
+        # Tokenize
+        tokens = re.findall(r"\w+", text.lower())
+        if not tokens:
+            return False
+        # Check simple token runs
+        run = 1
+        last = tokens[0]
+        for tok in tokens[1:]:
+            if tok == last:
+                run += 1
+                if run >= max_run:
+                    return True
+            else:
+                last = tok
+                run = 1
+        # Check n-gram repeated phrase runs for n=1..4
+        max_ngram = 4
+        n_tokens = len(tokens)
+        for n in range(1, max_ngram + 1):
+            i = 0
+            while i + 2 * n <= n_tokens:
+                # compare tokens[i:i+n] with subsequent repeated occurrences
+                pattern = tokens[i:i + n]
+                run = 1
+                j = i + n
+                while j + n <= n_tokens and tokens[j:j + n] == pattern:
+                    run += 1
+                    j += n
+                    if run >= max_run:
+                        return True
+                i += 1
+        # fallback regex for single-token repetition
+        if re.search(r"(\b\w+\b)(?:\s+\1\b){%d,}" % (max_run - 1), text.lower()):
+            return True
+        return False
+
+    def _contains_domain_noise(self, text: str) -> bool:
+        """Detect domain-like or short web boilerplate noise (e.g., 'Eksekutif.com', 'Semoga artikel ini bermanfaat').
+
+        Returns True if common domain patterns or boilerplate phrases are found.
+        """
+        if not text:
+            return False
+        if re.search(r"\b\S+\.(?:com|co\.id|info|id|net|org)(?:\.[a-z]{2,})*\b", text, flags=re.IGNORECASE):
+            return True
+        if re.search(r"(?i)\b(semoga artikel ini bermanfaat(?: bagi anda semua)?|semoga bermanfaat|terima kasih)\b", text):
+            return True
+        return False
+
+    def _normalize_overview_text(self, text: str) -> str:
+        """Normalize overview into a readable paragraph or keep structured lists tidy."""
+        if not text:
+            return text
+        t = text.strip()
+        # collapse repeated fragments first
+        t = _collapse_repeated_phrases_global(t)
+
+        # If text contains list markers or section headers, tidy spacing and return
+        if "\n-" in t or "Poin-Poin Penting" in t or "Keputusan" in t or "Action Items" in t:
+            # normalize newlines and strip extra spaces
+            t = re.sub(r"\n\s+", "\n", t)
+            t = re.sub(r"\n{2,}", "\n\n", t)
+            return t.strip()
+
+        # Otherwise make a single paragraph and deduplicate near-duplicate fragments
+        # split by common separators (newline, bullet, or hyphen sequences)
+        if " - " in t:
+            parts = [p.strip(" -" ) for p in re.split(r"\s*-\s*", t) if p.strip()]
+        else:
+            parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]
+
+        seen = set()
+        uniq = []
+        for p in parts:
+            norm = re.sub(r"[^a-z0-9 ]", "", p.lower())
+            norm = re.sub(r"\s+", " ", norm).strip()
+            if not norm:
+                continue
+            if norm in seen:
+                continue
+            seen.add(norm)
+            uniq.append(p.strip(" -."))
+
+        para = " ".join(uniq)
+        para = re.sub(r"\s+", " ", para).strip()
+
+        # Remove any leftover emails/domains or short web boilerplate that slipped through
+        para = re.sub(r"\b\S+@\S+\.\S+\b", " ", para)
+        para = re.sub(r"\b\S+\.(?:com|co\.id|info|id|net|org)(?:\.[a-z]{2,})*\b", " ", para, flags=re.IGNORECASE)
+        para = re.sub(r"(?i)\b(semoga artikel ini bermanfaat(?: bagi anda semua)?|semoga bermanfaat|terima kasih(?: atas masukannya| juga)?)\b[.!\s,]*", " ", para)
+        para = re.sub(r"\s+", " ", para).strip()
+
+        if para and not re.search(r"[.!?]$", para):
+            para = para + "."
+        if para:
+            para = para[0].upper() + para[1:]
+        return para
+
+    def _polish_overview(self, overview: str, full_text: str) -> str:
+        """Polish overview into an executive, coherent paragraph using abstractive model (if available).
+
+        Falls back to normalization and deduplication if model not available.
+        """
+        if not overview:
+            return overview
+        # Basic normalization first
+        overview = _collapse_repeated_phrases_global(overview)
+        overview = self._normalize_overview_text(overview)
+
+        # If model available and config allows, ask for paraphrase/expansion
+        if getattr(self.config, "polish_overview", True):
+            try:
+                self._load_model()
+                if self._pipeline is not None:
+                    prompt = (
+                        "Paraphrase dan perluas teks berikut menjadi paragraf eksekutif yang jelas, ringkas, dan mudah dibaca. "
+                        "Jangan sertakan header."
+                        "\n\nTeks:\n" + overview
+                    )
+                    out = self._pipeline(
+                        prompt,
+                        max_length=min(getattr(self.config, "comprehensive_max_length", 512), 350),
+                        min_length=40,
+                        truncation=True,
+                        do_sample=False,
+                    )
+                    if isinstance(out, list) and out:
+                        candidate = out[0].get("summary_text", "").strip()
+                        candidate = self._clean_abstractive_text(candidate)
+                        candidate = _collapse_repeated_phrases_global(candidate)
+                        candidate = self._normalize_overview_text(candidate)
+                        return candidate
+            except Exception:
+                pass
+
+        return overview
+
+    def _semantic_deduplicate(self, items: List[str], threshold: Optional[float] = None) -> List[str]:
+        """Deduplicate similar items using sentence-transformer embeddings + cosine similarity.
+
+        Returns the first occurrence for each semantic group.
+        """
+        if not items:
+            return []
+        thr = threshold if threshold is not None else getattr(self.config, "semantic_dedup_threshold", 0.75)
+        # try embeddings
+        try:
+            embs = self._compute_embeddings(items)
+            if embs is not None:
+                from sklearn.metrics.pairwise import cosine_similarity
+
+                sim = cosine_similarity(embs)
+                n = len(items)
+                taken = set()
+                result = []
+                for i in range(n):
+                    if i in taken:
+                        continue
+                    result.append(items[i])
+                    for j in range(i + 1, n):
+                        if sim[i, j] >= thr:
+                            taken.add(j)
+                # If embeddings didn't merge anything useful, fallback to token-jaccard grouping
+                if len(result) == len(items) and len(items) > 1:
+                    # token Jaccard
+                    token_sets = [set(re.findall(r"\w+", it.lower())) for it in items]
+                    taken2 = set()
+                    result2 = []
+                    for i in range(len(items)):
+                        if i in taken2:
+                            continue
+                        result2.append(items[i])
+                        for j in range(i + 1, len(items)):
+                            if j in taken2:
+                                continue
+                            si = token_sets[i]
+                            sj = token_sets[j]
+                            if not si or not sj:
+                                continue
+                            jacc = len(si & sj) / float(len(si | sj))
+                            if jacc >= 0.45:
+                                taken2.add(j)
+                    return result2
+                return result
+            else:
+                raise ValueError("No embeddings")
+        except Exception:
+            # fallback to token-jaccard grouping first (robust when embeddings aren't available)
+            try:
+                token_sets = [set(re.findall(r"\w+", it.lower())) for it in items]
+                taken = set()
+                res = []
+                for i in range(len(items)):
+                    if i in taken:
+                        continue
+                    res.append(items[i])
+                    si = token_sets[i]
+                    for j in range(i + 1, len(items)):
+                        if j in taken:
+                            continue
+                        sj = token_sets[j]
+                        if not si or not sj:
+                            continue
+                        jacc = len(si & sj) / float(len(si | sj))
+                        if jacc >= 0.45:
+                            taken.add(j)
+                return res
+            except Exception:
+                # final fallback to naive textual deduplication
+                seen = set()
+                res = []
+                for it in items:
+                    low = re.sub(r"\s+", " ", it.lower()).strip()
+                    if low in seen:
+                        continue
+                    seen.add(low)
+                    res.append(it)
+                return res
+
+    def _semantic_dedup_action_items(self, actions: List[Dict[str, str]], threshold: Optional[float] = None) -> List[Dict[str, str]]:
+        """Deduplicate action items by task text; merge owners when necessary."""
+        if not actions:
+            return []
+        tasks = [a.get("task", "") for a in actions]
+        groups = self._semantic_deduplicate(tasks, threshold=threshold)
+        # groups contains first representative tasks; now build merged items
+        merged = []
+        for rep in groups:
+            owners = []
+            timestamps = []
+            dues = set()
+            for a in actions:
+                if a.get("task", "") == rep or (rep and rep in a.get("task", "")):
+                    if a.get("owner") and a.get("owner") not in owners:
+                        owners.append(a.get("owner"))
+                    if a.get("timestamp"):
+                        timestamps.append(a.get("timestamp"))
+                    if a.get("due"):
+                        dues.add(a.get("due"))
+            owner_str = " / ".join(owners) if owners else "TBD"
+            merged.append({
+                "owner": owner_str,
+                "task": rep,
+                "timestamp": timestamps[0] if timestamps else "",
+                "due": ", ".join(sorted(list(dues))) if dues else "",
+            })
+        return merged
+
+    def generate_comprehensive_summary(self, full_text: str, key_points: List[str], decisions: List[str], action_items: List[Dict[str, str]], topics: List[str]) -> (str, List[str]):
+        """Generate a comprehensive executive summary covering the meeting.
+
+        Uses the abstractive pipeline with a guided prompt built from extracted components.
+        Attempts to request YAML-structured output for reliable parsing; falls back to rule-based assembly.
+        Returns (overview_text, keywords)
+        """
+        # Build a structured prompt that requests YAML output for safe parsing
+        prompt_parts = [
+            "Anda adalah asisten yang menulis ringkasan rapat yang komprehensif dan terstruktur.",
+            "Output harus dalam format YAML dengan kunci: overview, key_points (list), decisions (list), action_items (list of {owner, task, due}), keywords (list).",
+            "Berikan overview naratif yang jelas, serta daftar poin penting, keputusan, dan tindak lanjut.",
+            "Topik yang dibahas:",
+            ", ".join(topics) if topics else "-",
+            "Poin-poin penting:\n" + "\n".join([f"- {p}" for p in key_points]) if key_points else "",
+            "Keputusan:\n" + "\n".join([f"- {d}" for d in decisions]) if decisions else "",
+            "Tindak lanjut (Action Items):\n" + "\n".join([f"- [{a.get('owner','TBD')}] {a.get('task','')}" for a in action_items]) if action_items else "",
+            "Tuliskan field 'overview' minimal 80 kata sebagai paragraf naratif yang merangkum seluruh rapat dengan jelas.",
+            "Mohon hasilkan YAML yang valid."
+        ]
+        prompt = "\n\n".join([p for p in prompt_parts if p])
+
+        # Sanitize inputs to avoid placeholder tokens and repeated garbage
+        key_points = [self._sanitize_for_prompt(k) for k in key_points if k and k.strip()]
+        decisions = [self._sanitize_for_prompt(d) for d in decisions if d and d.strip()]
+        for a in action_items:
+            a['task'] = self._sanitize_for_prompt(a.get('task',''))
+
+        # Deduplicate before sending to model
+        try:
+            key_points = self._semantic_deduplicate(key_points)
+            decisions = self._semantic_deduplicate(decisions)
+        except Exception:
+            key_points = list(dict.fromkeys(key_points))
+            decisions = list(dict.fromkeys(decisions))
+
+        # Use pipeline if available
+        try:
+            self._load_model()
+            if self._pipeline is not None:
+                # Try up to 2 attempts: first deterministic, second sampled if repetition/shortness detected
+                attempts = 2
+                for attempt in range(attempts):
+                    gen_kwargs = dict(
+                        max_length=getattr(self.config, "comprehensive_max_length", 512),
+                        min_length=max(80, int(getattr(self.config, "comprehensive_max_length", 512) * 0.12)),
+                        truncation=True,
+                        do_sample=False,
+                        no_repeat_ngram_size=4,
+                        repetition_penalty=1.3,
+                    )
+                    if attempt == 1:
+                        # more creative generation if deterministic attempt failed
+                        gen_kwargs.update({"do_sample": True, "temperature": 0.7, "top_p": 0.9})
+
+                    out = self._pipeline(prompt, **gen_kwargs)
+                    text = out[0].get("summary_text", "").strip()
+
+                    # collapse repeated fragments, then clean
+                    text = self._collapse_repeated_phrases(text)
+                    cleaned = self._clean_abstractive_text(text)
+
+                    # Quick heuristic checks (repetition, too short, or domain-like web boilerplate -> retry)
+                    if self._is_repetitive_text(cleaned) or len(cleaned.split()) < 20 or self._contains_domain_noise(cleaned):
+                        # try again (next attempt) with sampling
+                        if attempt + 1 < attempts:
+                            continue
+
+                    # Attempt to parse structured YAML/JSON
+                    overview, keywords = self._parse_structured_output(cleaned, {
+                        "key_points": key_points,
+                        "decisions": decisions,
+                        "action_items": action_items,
+                    })
+
+                    # Final normalization / optional polish
+                    overview = self._normalize_overview_text(overview)
+                    if getattr(self.config, "polish_overview", True):
+                        overview = self._polish_overview(overview, full_text)
+
+                    # Validate overview quality: non-empty, not too short, not repetitive
+                    if overview and len(overview.split()) >= 10 and not self._is_repetitive_text(overview):
+                        return overview, keywords
+                    else:
+                        # Try next attempt if available, otherwise break to fallback
+                        if attempt + 1 < attempts:
+                            continue
+                        else:
+                            break
+        except Exception:
+            pass
+
+        # Fallback rule-based assembly: construct a narrative paragraph summarizing meeting,
+        # rather than repeating the list headers. Use polishing to turn it into an executive paragraph.
+        def _format_action_items(ai_list):
+            pairs = []
+            for a in ai_list:
+                owner = a.get('owner', 'TBD')
+                task = a.get('task', '').strip()
+                if task:
+                    pairs.append(f"{owner} akan {task.rstrip('.')}.")
+            return " ".join(pairs)
+
+        def _join_points(pts):
+            # join key points into a sentence
+            if not pts:
+                return ""
+            # take up to 4 points to avoid overly long lists
+            pts_sample = pts[:4]
+            return "; ".join([p.rstrip('.') for p in pts_sample]) + ""
+
+        narrative_parts = []
+        if topics:
+            narrative_parts.append("Topik utama yang dibahas meliputi: " + ", ".join(topics) + ".")
+        if key_points:
+            narrative_parts.append("Beberapa poin penting termasuk: " + _join_points(key_points) + ".")
+        if decisions:
+            narrative_parts.append("Keputusan utama yang dicapai termasuk: " + ", ".join([d.rstrip('.') for d in decisions]) + ".")
+        if action_items:
+            narrative_parts.append("Tindak lanjut yang disepakati di antaranya: " + _format_action_items(action_items))
+
+        assembled = " ".join([p for p in narrative_parts if p]).strip()
+        # Normalize and then optionally polish into a smooth executive paragraph
+        assembled = self._normalize_overview_text(assembled)
+        if getattr(self.config, "polish_overview", True):
+            assembled = self._polish_overview(assembled, full_text)
+
+        keywords = self._generate_keywords(assembled, top_k=8)
+        return assembled, keywords
 
     def summarize(self, transcript_segments: List[TranscriptSegment]) -> MeetingSummary:
         self._load_model()
@@ -246,10 +805,7 @@ class AbstractiveSummarizer:
                         truncation=True,
                         do_sample=False,
                     )
-                    # Clean potential model artefacts from generated summary
-                    chunk_summary = out[0].get("summary_text", "").strip()
-                    chunk_summary = self._clean_abstractive_text(chunk_summary)
-                    partial_summaries.append(chunk_summary)
+                    partial_summaries.append(out[0]["summary_text"].strip())
                 except Exception as e:
                     print(f"[Summarizer] chunk summarization failed: {e}")
                     continue
@@ -265,18 +821,14 @@ class AbstractiveSummarizer:
                         truncation=True,
                         do_sample=False,
                     )
-                    # Clean artefacts in combined overview
-                    overview = out[0].get("summary_text", "").strip()
-                    overview = self._clean_abstractive_text(overview)
+                    overview = out[0]["summary_text"].strip()
                 except Exception:
                     overview = combined
             else:
                 overview = combined
 
-        # Extract sentences and key points heuristically from overview
-        key_points = [s.strip() for s in re.split(r"\.|!|\?", overview) if s.strip()][
-            : self.config.num_sentences
-        ]
+        # Clean abstractive overview and produce robust key points (use helper)
+        overview, key_points = self._clean_abstractive_output(overview, full_text)
 
         # Extract decisions and actions via keywords
         sentences = BERTSummarizer(self.config)._split_sentences(full_text)
@@ -284,13 +836,24 @@ class AbstractiveSummarizer:
         action_items = BERTSummarizer(self.config)._extract_action_items(transcript_segments)
         topics = BERTSummarizer(self.config)._extract_topics(full_text)
 
-        return MeetingSummary(
+        # Optionally produce a comprehensive overview (uses abstractive pipeline)
+        if getattr(self.config, "comprehensive_overview", False):
+            try:
+                comp_overview, keywords = self.generate_comprehensive_summary(full_text, key_points, decisions, action_items, topics)
+                overview = comp_overview
+            except Exception:
+                keywords = []
+
+        ms = MeetingSummary(
             overview=overview,
             key_points=key_points,
             decisions=decisions,
             action_items=action_items,
             topics=topics,
         )
+        if 'keywords' in locals():
+            setattr(ms, 'keywords', keywords)
+        return ms
 
 
 class BERTSummarizer:
@@ -336,6 +899,18 @@ class BERTSummarizer:
                 print(f"[Summarizer] Warning: Could not load model: {e}")
                 print("[Summarizer] Using fallback mode")
                 self._model = "FALLBACK"
+
+    def _semantic_deduplicate(self, items: List[str], threshold: Optional[float] = None) -> List[str]:
+        """Delegate to AbstractiveSummarizer semantic dedup for compatibility."""
+        return AbstractiveSummarizer(self.config)._semantic_deduplicate(items, threshold)
+
+    def _semantic_dedup_action_items(self, actions: List[Dict[str, str]], threshold: Optional[float] = None) -> List[Dict[str, str]]:
+        """Delegate to AbstractiveSummarizer action-item dedup for compatibility."""
+        return AbstractiveSummarizer(self.config)._semantic_dedup_action_items(actions, threshold)
+
+    def _collapse_repeated_phrases(self, text: str, max_ngram: int = 6, min_repeats: int = 2) -> str:
+        """Delegates to module-level collapse helper for compatibility."""
+        return _collapse_repeated_phrases_global(text, max_ngram=max_ngram, min_repeats=min_repeats)
 
     def summarize(self, transcript_segments: List[TranscriptSegment]) -> MeetingSummary:
         """
@@ -414,9 +989,10 @@ class BERTSummarizer:
                     )
                     # Expect a single summary text
                     if isinstance(out, list) and out:
-                        overview = out[0].get("summary_text", overview).strip()
-                        # Clean refinement output
-                        overview = abs_sum._clean_abstractive_text(overview)
+                        raw_overview = out[0].get("summary_text", overview).strip()
+                        # Use AbstractiveSummarizer's cleaning & fallback logic
+                        overview_cleaned, _ = abs_sum._clean_abstractive_output(raw_overview, full_text)
+                        overview = overview_cleaned
             except Exception:
                 # Fail silently and use extractive overview
                 pass
@@ -459,6 +1035,12 @@ class BERTSummarizer:
                         decisions.append(ks)
                         seen_decisions.add(ks)
 
+        # Apply semantic deduplication to decisions
+        try:
+            decisions = self._semantic_deduplicate(decisions)
+        except Exception:
+            pass
+
         # Extract action items at sentence level with speaker inference
         action_items = []
         seen_tasks = set()
@@ -467,6 +1049,9 @@ class BERTSummarizer:
             flags=re.IGNORECASE,
         )
 
+        # verbs that indicate an actionable commitment (used to validate generic keyword matches)
+        action_verbs_re = re.compile(r"\b(akan|harus|siapkan|bikin|buat|selesaikan|dikerjakan|tolong|mohon|harap)\b", flags=re.IGNORECASE)
+
         for i, s in enumerate(sentences):
             text = re.sub(r"\[OVERLAP\]|\[NOISE\]|<.*?>", "", s).strip()
             if not text:
@@ -474,7 +1059,7 @@ class BERTSummarizer:
 
             # explicit commit patterns
             commit_re = re.compile(
-                r"\b(aku|saya|kami|kita|kamu)\b.*\b(bertanggung jawab|akan|saya akan|aku akan|aku akan membuat|kamu tolong|tolong|siapkan|bikin)\b",
+                r"\b(aku|saya|kami|kita|kamu)\b.*\b(bertanggung jawab|akan|saya akan|aku akan|aku akan membuat|kamu tolong|tolong|siapkan|bikin|harus|selesaikan|dikerjakan)\b",
                 flags=re.IGNORECASE,
             )
 
@@ -485,7 +1070,7 @@ class BERTSummarizer:
                 owner = sent_meta[i]["speaker_id"]
                 # try to isolate the actionable clause
                 task = re.sub(
-                    r"^.*?\b(bertanggung jawab|akan|saya akan|aku akan|kamu tolong|tolong|siapkan|bikin)\b",
+                    r"^.*?\b(bertanggung jawab|akan|saya akan|aku akan|kamu tolong|tolong|siapkan|bikin|harus|selesaikan|dikerjakan)\b",
                     "",
                     text,
                     flags=re.IGNORECASE,
@@ -495,7 +1080,9 @@ class BERTSummarizer:
                     task = text
 
             elif action_kw_re.search(text):
-                # Use sentence as task, infer owner as the speaker of this sentence
+                # Validate generic matches for actionability using helper
+                if not self._is_actionable_text(text):
+                    continue
                 owner = sent_meta[i]["speaker_id"]
                 task = text
 
@@ -527,17 +1114,35 @@ class BERTSummarizer:
         if not action_items:
             action_items = self._extract_action_items(transcript_segments)
 
+        # Apply semantic deduplication to action items (merge owners when possible)
+        try:
+            action_items = self._semantic_dedup_action_items(action_items)
+        except Exception:
+            pass
+
         # Extract topics (frequency-based) from cleaned full_text
         topics = self._extract_topics(full_text)
 
+        # Optionally produce a comprehensive overview (may use abstractive pipeline)
+        if getattr(self.config, "comprehensive_overview", False):
+            try:
+                abs_s = AbstractiveSummarizer(self.config)
+                comp_overview, keywords = abs_s.generate_comprehensive_summary(full_text, key_points, decisions, action_items, topics)
+                overview = comp_overview
+            except Exception:
+                keywords = []
+
         # Return comprehensive MeetingSummary
-        return MeetingSummary(
+        ms = MeetingSummary(
             overview=overview,
             key_points=key_points,
             decisions=decisions,
             action_items=action_items,
             topics=topics,
         )
+        if 'keywords' in locals():
+            setattr(ms, 'keywords', keywords)
+        return ms
 
     def _split_sentences(self, text: str) -> List[str]:
         """Split text into sentences"""
@@ -562,6 +1167,9 @@ class BERTSummarizer:
             if len(s) > self.config.max_sentence_length:
                 # Truncate very long sentences
                 s = s[: self.config.max_sentence_length] + "..."
+
+            # Collapse trivial repeated fragments inside sentence
+            s = self._collapse_repeated_phrases(s)
 
             cleaned.append(s)
 
@@ -801,8 +1409,13 @@ class BERTSummarizer:
         return overview
 
     def _extract_decisions(self, sentences: List[str]) -> List[str]:
-        """Extract decision-related sentences"""
-        decisions = []
+        """Extract decision-related sentences and synthesize enumerated decisions.
+
+        This method collects sentence-level decision mentions, attempts to synthesize
+        clauses from enumerated statements (e.g., "Pertama..., Kedua..."),
+        and performs semantic deduplication to avoid repeated/near-duplicate items.
+        """
+        raw = []
 
         for sent in sentences:
             sent_lower = sent.lower()
@@ -810,12 +1423,83 @@ class BERTSummarizer:
             # Check for decision keywords
             if any(kw in sent_lower for kw in self.config.decision_keywords):
                 # Clean the sentence
-                clean_sent = sent.strip()
-                if clean_sent and clean_sent not in decisions:
-                    decisions.append(clean_sent)
+                clean_sent = re.sub(r"\s+", " ", sent).strip()
+                if clean_sent and clean_sent not in raw:
+                    raw.append(clean_sent)
 
-        # Limit number of decisions
-        return decisions[:7]
+        # Try to synthesize enumerated decisions from sentences
+        synthesized = self._synthesize_enumerated_decisions(sentences)
+
+        all_decisions = raw + synthesized
+
+        # Deduplicate semantically (Jaccard over tokens)
+        deduped = self._deduplicate_strings(all_decisions)
+
+        # Limit number of decisions returned
+        return deduped[:7]
+
+    def _synthesize_enumerated_decisions(self, sentences: List[str]) -> List[str]:
+        """Extract clauses following enumerations like 'Pertama..., Kedua...' and return list.
+
+        Handles both ordinal words (pertama, kedua, ...) and numbered lists (1., 2.)
+        by splitting and returning non-trivial clauses.
+        """
+        synth: List[str] = []
+        enum_words_re = re.compile(r"\b(pertama|kedua|ketiga|keempat|kelima)\b", flags=re.IGNORECASE)
+
+        for s in sentences:
+            s_clean = s.strip()
+            if enum_words_re.search(s_clean.lower()):
+                # Split by Indonesian ordinal words
+                parts = re.split(r"\bpertama\b|\bkedua\b|\bketiga\b|\bkeempat\b|\bkelima\b", s_clean, flags=re.IGNORECASE)
+                for p in parts:
+                    p = p.strip(" .,:;\n-–—")
+                    if len(p.split()) >= 3 and p not in synth:
+                        synth.append(p)
+
+            # Also handle simple numbered enumerations like '1. ... 2. ...'
+            if re.search(r"\d+\.\s*", s_clean):
+                parts = re.split(r"\d+\.\s*", s_clean)
+                for p in parts:
+                    p = p.strip(" .,:;\n-–—")
+                    if len(p.split()) >= 3 and p not in synth:
+                        synth.append(p)
+
+        return synth
+
+    def _normalize_text_for_dedup(self, text: str) -> str:
+        """Normalize text for lightweight semantic deduplication."""
+        t = text.lower()
+        # remove punctuation, keep alphanumerics and spaces
+        t = re.sub(r"[^a-z0-9\s]+", "", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def _deduplicate_strings(self, items: List[str], threshold: float = 0.5) -> List[str]:
+        """Deduplicate items using token Jaccard similarity threshold."""
+        kept: List[str] = []
+        norms: List[str] = []
+
+        for it in items:
+            n = self._normalize_text_for_dedup(it)
+            if not n:
+                continue
+            toks1 = set(n.split())
+            is_dup = False
+            for other in norms:
+                toks2 = set(other.split())
+                if not toks1 or not toks2:
+                    continue
+                inter = len(toks1 & toks2)
+                union = len(toks1 | toks2)
+                if union > 0 and (inter / union) >= threshold:
+                    is_dup = True
+                    break
+            if not is_dup:
+                kept.append(it)
+                norms.append(n)
+
+        return kept
 
     def _extract_action_items(self, segments: List[TranscriptSegment]) -> List[Dict[str, str]]:
         """Extract action items with speaker attribution (improved heuristics)
@@ -823,9 +1507,10 @@ class BERTSummarizer:
         Heuristics:
         - Detect explicit commitments like "aku akan", "saya bertanggung jawab", "kamu siapkan" and assign owner
         - Fallback to keyword-based detection
-        - Remove overlapping/annotation tokens and short filler phrases
+        - Normalize duplicate tasks and detect simple due-date mentions like "minggu depan", "besok"
+        - Try to infer explicit owner names mentioned in the clause
         """
-        action_items = []
+        action_items: List[Dict[str, str]] = []
         seen_tasks = set()
 
         # Try to use AdvancedNLPExtractor (NER + dependency parse) for higher-quality extraction
@@ -845,16 +1530,19 @@ class BERTSummarizer:
                         "owner": item.get("owner", "TBD"),
                         "task": item.get("task", "").strip(),
                         "timestamp": f"{sent_meta[item.get('sentence_idx', 0)]['start']:.1f}s",
-                        "due": "",
+                        "due": self._detect_due_from_text(item.get("task", "")),
                     }
                 )
         except Exception:
             extractor = None
 
         commit_re = re.compile(
-            r"\b(aku|saya|kami|kita|kamu)\b.*\b(bertanggung jawab|akan|saya akan|aku akan|aku akan membuat|kamu tolong|tolong|siapkan|bikin)\b",
+            r"\b(aku|saya|kami|kita|kamu)\b.*\b(bertanggung jawab|akan|saya akan|aku akan|aku akan membuat|kamu tolong|tolong|siapkan|bikin|harus|selesaikan|dikerjakan)\b",
             flags=re.IGNORECASE,
         )
+
+        # Actionable verbs/phrases to validate generic keyword matches
+        _action_verbs_re = re.compile(r"\b(akan|harus|siapkan|bikin|buat|selesaikan|dikerjakan|tolong|mohon|harap)\b", flags=re.IGNORECASE)
 
         for seg in segments:
             if not seg.text:
@@ -877,37 +1565,132 @@ class BERTSummarizer:
                     # fallback to whole segment
                     task = text
 
-                task_key = task.lower()[:80]
+                # Try to detect explicit owner name within the clause (e.g., "Budi akan ...")
+                owner = self._extract_name_as_owner(text) or seg.speaker_id
+
+                task_key = task.lower()[:120]
                 if task_key not in seen_tasks:
                     seen_tasks.add(task_key)
                     action_items.append(
                         {
-                            "owner": seg.speaker_id,
+                            "owner": owner,
                             "task": task,
                             "timestamp": f"{seg.start:.1f}s",
-                            "due": "",
+                            "due": self._detect_due_from_text(task),
                         }
                     )
                 continue
 
             # 2) keyword-based detection
             if any(kw in text_lower for kw in self.config.action_keywords):
+                # Validate that the segment is actionable (has verbs like 'akan'/'perlu' or explicit name)
+                if not self._is_actionable_text(text):
+                    continue
+
+                owner = self._extract_name_as_owner(text) or seg.speaker_id
                 task = text.strip()
-                task_key = task.lower()[:80]
+                task_key = task.lower()[:120]
                 if task_key in seen_tasks:
                     continue
                 seen_tasks.add(task_key)
                 action_items.append(
                     {
-                        "owner": seg.speaker_id,
+                        "owner": owner,
                         "task": task,
                         "timestamp": f"{seg.start:.1f}s",
-                        "due": "",
+                        "due": self._detect_due_from_text(task),
                     }
                 )
 
+        # Post-process: deduplicate semantically and filter tiny filler tasks
+        processed: List[Dict[str, str]] = []
+        seen_norms = set()
+
+        # Filter out filler / non-actionable phrases (e.g., meeting start/thanks)
+        filler_patterns = [
+            r"\bkita mulai rapat",
+            r"\bitu yang mau kita bahas",
+            r"\bterima kasih",
+            r"\bok(e|ey)?\b",
+            r"\bsip\b",
+            r"\bcukup(kan)? sampai",
+            r"\btidak ada( yang)?\b",
+            r"\biya\b",
+            r"\bsetuju\b",
+        ]
+        filler_re = re.compile("|".join(filler_patterns), flags=re.IGNORECASE)
+
+        for it in action_items:
+            task_text = it.get("task", "")
+
+            # Skip common non-actionable conversational lines
+            if filler_re.search(task_text):
+                continue
+
+            # Ensure the sentence is actionable (has a commitment verb or explicit owner/name)
+            if not self._is_actionable_text(task_text):
+                continue
+
+            norm = self._normalize_text_for_dedup(task_text)[:200]
+            # skip if too short
+            if len(task_text.split()) < 3:
+                continue
+            if norm in seen_norms:
+                continue
+            seen_norms.add(norm)
+            processed.append(it)
+
         # Limit number of action items
-        return action_items[:15]
+        return processed[:15]
+
+    def _detect_due_from_text(self, text: str) -> str:
+        """Detect simple due-date hints from text and return a short normalized due string."""
+        t = text.lower()
+        if "besok" in t:
+            return "besok"
+        if "segera" in t or "secepat" in t or "sekarang" in t:
+            return "segera"
+        if "minggu depan" in t:
+            return "1 minggu"
+        m = re.search(r"(\d+)\s*minggu", t)
+        if m:
+            return f"{m.group(1)} minggu"
+        if "2 minggu" in t or "dua minggu" in t:
+            return "2 minggu"
+        if "deadline" in t:
+            # try to capture a following date/token
+            m2 = re.search(r"deadline\s*[:\-\s]*([\w\-\./]+)", t)
+            return m2.group(1) if m2 else "TBD"
+        return ""
+
+    def _extract_name_as_owner(self, text: str) -> Optional[str]:
+        """Return a candidate owner name if a capitalized proper name is explicitly present in the clause.
+
+        Simple heuristic: look for capitalized words (not at sentence start if it's a pronoun) followed by 'akan' or similar.
+        """
+        m = re.search(r"\b([A-Z][a-z]{2,})\b(?=\s+akan|\s+siapkan|\s+tolong|\s+bisa|\s+bertanggung)", text)
+        if m:
+            return m.group(1)
+        return None
+
+    def _is_actionable_text(self, text: str) -> bool:
+        """Return True if text contains indicators of an actionable commitment.
+
+        Indicators:
+        - Commitment verbs (akan, harus, perlu, siapkan, dll.)
+        - Explicit owner mention (capitalized name)
+        - Time indicators / deadlines (besok, minggu depan, deadline)
+        """
+        t = text or ""
+        tl = t.lower()
+        if re.search(r"\b(akan|harus|siapkan|bikin|buat|selesaikan|dikerjakan|tolong|mohon|harap|perlu)\b", tl):
+            return True
+        # Only consider capitalized names as indicators if followed by an action verb
+        if re.search(r"\b([A-Z][a-z]{2,})\b(?=\s+(akan|siapkan|tolong|mohon|harus|selesaikan|buat|bikin))", t):
+            return True
+        if any(k in tl for k in ("deadline", "minggu depan", "besok")):
+            return True
+        return False
 
     def _extract_topics(self, text: str, num_topics: int = 5) -> List[str]:
         """Extract main topics from text using simple frequency analysis"""
