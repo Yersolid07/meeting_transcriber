@@ -20,7 +20,7 @@ class SummarizationConfig:
     """Configuration for summarization"""
 
     # Method: 'extractive' (BERT embeddings) or 'abstractive' (seq2seq model)
-    method: str = "abstractive"
+    method: str = "extractive"
 
     # Models
     # Use a cached/available model for reliability in offline environments
@@ -189,6 +189,24 @@ class AbstractiveSummarizer:
             start = cut
         return chunks
 
+    def _clean_abstractive_text(self, text: str) -> str:
+        """Clean artefacts from abstractive summarizer outputs (remove sentinel tokens, collapse punctuation, whitespace)"""
+        if not text:
+            return text
+        # Remove T5-style sentinel tokens like <extra_id_0>
+        text = re.sub(r"<extra_id_\d+>", "", text)
+        # Collapse multiple whitespace
+        text = re.sub(r"\s+", " ", text).strip()
+        # Normalize repeated ellipsis and punctuation
+        text = re.sub(r"\.{3,}", "...", text)
+        text = re.sub(r"([!?]){2,}", r"\1", text)
+        # Remove space before punctuation
+        text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+        # Ensure it ends with sentence punctuation
+        if not re.search(r"[.!?]$", text):
+            text = text + "."
+        return text
+
     def summarize(self, transcript_segments: List[TranscriptSegment]) -> MeetingSummary:
         self._load_model()
 
@@ -228,7 +246,10 @@ class AbstractiveSummarizer:
                         truncation=True,
                         do_sample=False,
                     )
-                    partial_summaries.append(out[0]["summary_text"].strip())
+                    # Clean potential model artefacts from generated summary
+                    chunk_summary = out[0].get("summary_text", "").strip()
+                    chunk_summary = self._clean_abstractive_text(chunk_summary)
+                    partial_summaries.append(chunk_summary)
                 except Exception as e:
                     print(f"[Summarizer] chunk summarization failed: {e}")
                     continue
@@ -244,7 +265,9 @@ class AbstractiveSummarizer:
                         truncation=True,
                         do_sample=False,
                     )
-                    overview = out[0]["summary_text"].strip()
+                    # Clean artefacts in combined overview
+                    overview = out[0].get("summary_text", "").strip()
+                    overview = self._clean_abstractive_text(overview)
                 except Exception:
                     overview = combined
             else:
@@ -392,6 +415,8 @@ class BERTSummarizer:
                     # Expect a single summary text
                     if isinstance(out, list) and out:
                         overview = out[0].get("summary_text", overview).strip()
+                        # Clean refinement output
+                        overview = abs_sum._clean_abstractive_text(overview)
             except Exception:
                 # Fail silently and use extractive overview
                 pass
