@@ -9,6 +9,8 @@ build/
 *.egg-info/
 
 # Virtual environments
+.venv/
+.venv-311/
 venv/
 env/
 .env
@@ -26,6 +28,8 @@ data/output/
 cache/
 logs/
 dataset_mentah/
+recipes/summarize_NLP/BERT/
+recipes/summarize_NLP/BART/
 
 # Keep directory structure
 !data/audio/.gitkeep

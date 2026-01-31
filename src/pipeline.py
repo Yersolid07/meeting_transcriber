@@ -69,6 +69,12 @@ class PipelineConfig:
 
     # Summarization settings
     num_summary_sentences: int = 5
+    # Optional: allow overriding the abstractive model id (HF repo or local path)
+    abstractive_model_id: Optional[str] = None
+    # Optional: override the sentence-transformer model used for extractive summarization
+    sentence_model_id: Optional[str] = None
+    # Summarization method override ('extractive'|'abstractive')
+    summarization_method: str = "extractive"
 
     # Device
     device: str = "auto"
@@ -328,6 +334,40 @@ class MeetingTranscriberPipeline:
                     asr_cfg.parallel_workers = int(self.config.asr_parallel_workers)
                 except Exception:
                     pass
+
+            # Runtime validation: ensure WhisperX gets a CTranslate2 model (local CT2 dir containing 'model.bin')
+            if asr_cfg.backend == "whisperx":
+                try:
+                    from pathlib import Path
+
+                    model_id_str = str(getattr(asr_cfg, "model_id", "") or "")
+                    p = Path(model_id_str)
+                    # If the model path exists locally, ensure it contains the expected 'model.bin'
+                    if p.exists():
+                        if p.is_dir():
+                            if not (p / "model.bin").exists():
+                                raise ValueError(
+                                    f"WhisperX requires a CTranslate2 model directory containing 'model.bin'. Provided path exists but 'model.bin' not found: {p}. Convert your HF checkpoint to CTranslate2 or use --asr-backend whisper."
+                                )
+                        else:
+                            # it's a local file; only acceptable if it's model.bin itself
+                            if p.name != "model.bin":
+                                raise ValueError(
+                                    f"WhisperX expects a CTranslate2 model directory (contains 'model.bin'). Provided file {p} does not look like a valid CT2 model."
+                                )
+                    else:
+                        # If model_id looks like a HF hub id (owner/repo), warn the user
+                        if "/" in model_id_str:
+                            raise ValueError(
+                                f"WhisperX requires a converted CTranslate2 model (local directory). Provided model id '{model_id_str}' appears to be a HF Hub checkpoint. Either convert it to CTranslate2 or set --asr-backend whisper to use the HF checkpoint directly."
+                            )
+                except ValueError:
+                    # Re-raise user-facing compatibility errors
+                    raise
+                except Exception as e:
+                    # Non-fatal: log the issue and continue (transcriber may still attempt to load)
+                    self._log(f"Warning: Failed to validate WhisperX model compatibility: {e}")
+
             if (
                 getattr(self.config, "asr_backend", None) == "speechbrain"
                 and SpeechBrainTranscriber is not None
@@ -348,9 +388,16 @@ class MeetingTranscriberPipeline:
     def summarizer(self) -> BERTSummarizer:
         """Get summarizer (lazy loaded)"""
         if self._summarizer is None:
-            self._summarizer = BERTSummarizer(
-                config=SummarizationConfig(num_sentences=self.config.num_summary_sentences)
-            )
+            sum_cfg = SummarizationConfig(num_sentences=self.config.num_summary_sentences)
+            # Apply optional overrides from pipeline config
+            if getattr(self.config, "abstractive_model_id", None):
+                sum_cfg.abstractive_model_id = self.config.abstractive_model_id
+            if getattr(self.config, "sentence_model_id", None):
+                sum_cfg.sentence_model_id = self.config.sentence_model_id
+            if getattr(self.config, "summarization_method", None):
+                sum_cfg.method = self.config.summarization_method
+
+            self._summarizer = BERTSummarizer(config=sum_cfg)
         return self._summarizer
 
     @property

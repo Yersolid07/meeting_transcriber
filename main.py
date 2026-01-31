@@ -224,6 +224,25 @@ Untuk dokumentasi lengkap, lihat README.md
         help="Kode bahasa (mis: id, en, auto). Untuk WhisperX: 'auto' = autodetect.",
     )
     model_group.add_argument(
+        "--abstractive-model",
+        type=str,
+        default=None,
+        help="Abstractive summarization model id or local path (HF model).",
+    )
+    model_group.add_argument(
+        "--summarization-method",
+        type=str,
+        choices=["extractive", "abstractive"],
+        default=None,
+        help="(opsional) Override summarization method (extractive|abstractive).",
+    )
+    model_group.add_argument(
+        "--sentence-embedding-model",
+        type=str,
+        default=None,
+        help="Override sentence-transformers model id used for extractive summarization (default: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2).",
+    )
+    model_group.add_argument(
         "--whisperx-compute-type",
         type=str,
         default="auto",
@@ -547,6 +566,9 @@ def main():
         print("ASR Backend: {}".format(args.asr_backend))
         print("ASR Model: {}".format(args.asr_model))
         print("ASR Language: {}".format(args.asr_language))
+        print("Abstractive Model: {}".format(args.abstractive_model))
+        print("Summarization Method: {}".format(args.summarization_method))
+        print("Sentence Embedding Model: {}".format(args.sentence_embedding_model))
         print("Output Dir: {}".format(args.output))
 
     # Initialize pipeline
@@ -573,6 +595,11 @@ def main():
         tune_diarization=args.tune_diarization,
         num_speakers=args.speakers,
         preset=args.preset,
+        # Abstractive summarizer overrides
+        abstractive_model_id=args.abstractive_model,
+        summarization_method=args.summarization_method,
+        # Sentence embedding model (for extractive summarization)
+        sentence_model_id=args.sentence_embedding_model,
     )
 
     pipeline = MeetingTranscriberPipeline(config)

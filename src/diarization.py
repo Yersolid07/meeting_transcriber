@@ -46,7 +46,7 @@ class DiarizationConfig:
     # Model settings
     embedding_model_id: str = "speechbrain/spkrec-ecapa-voxceleb"
     use_speechbrain: bool = True  # prefer SpeechBrain embeddings
-    allow_fallback: bool = False  # if False, raise an error when SpeechBrain cannot be loaded
+    allow_fallback: bool = True  # if False, raise an error when SpeechBrain cannot be loaded
 
     # Collapse heuristics
     collapse_threshold: float = 0.15

@@ -1,0 +1,50 @@
+# Core
+torch>=2.8.0,<2.9.0
+torchaudio>=2.8.0,<2.9.0
+
+# HuggingFace stack (LOCKED)
+huggingface_hub>=0.24.0,<1.0.0
+transformers>=4.48.0,<5.0.0
+tokenizers>=0.21.0,<0.22.0
+sentence-transformers==2.2.2
+speechbrain>=1.0.0
+
+
+# Speech
+whisperx==3.7.6
+# webrtcvad==2.0.10  # Requires Visual C++ Build Tools
+soundfile
+librosa
+pydub
+
+# ML / data
+numpy>=2.1.0
+pandas>=2.2.3
+scipy>=1.13.0
+scikit-learn>=1.5.0
+
+# Eval
+jiwer==3.0.3
+
+# Docs
+python-docx
+
+# Utils
+pyyaml
+tqdm
+colorama
+tabulate
+python-dotenv
+
+# HF training
+datasets
+evaluate
+accelerate
+peft
+ffmpeg-python
+langdetect
+
+# UI
+streamlit
+matplotlib
+seaborn

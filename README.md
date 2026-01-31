@@ -188,6 +188,56 @@ python main.py --audio rapat.wav --prefer-whisper-small
 python main.py --audio rapat.wav --quick-asr
 ```
 
+### Using custom / fine-tuned models 🔧
+
+You can use your own fine-tuned models for ASR and abstractive summarization by passing model identifiers (Hugging Face repo IDs) or local model paths.
+
+- Custom ASR (Transformers / Whisper / WhisperX):
+
+```bash
+# Transformers CTC (wav2vec2) from HF
+python main.py --audio rapat.wav --asr-backend transformers --asr-model "myuser/wav2vec2-finetuned-en" --asr-language en
+
+# Whisper (transformers seq2seq)
+python main.py --audio rapat.wav --asr-backend whisper --asr-model "myuser/whisper-finetuned" --asr-language en
+
+# WhisperX (faster-whisper / CTranslate2): point to a CT2 converted model dir that contains model.bin
+python main.py --audio rapat.wav --asr-backend whisperx --asr-model "path/to/ctranslate2_model_dir" --asr-language en
+```
+
+Notes:
+- WhisperX requires a CTranslate2-converted model (contains `model.bin`). If you supply a HF Transformers checkpoint to WhisperX it may be rejected; prefer passing a CT2 model dir or use the `whisper`/`transformers` backends for HF repos.
+- If you use `--preset deployment`, the pipeline may override incompatible ASR model ids to the recommended WhisperX model. To force use of your model, pass `--asr-model` explicitly and avoid `--preset deployment`.
+- To avoid language switching artifacts, set `--asr-language en` for English audio.
+
+- Custom Abstractive Summarizer (seq2seq models):
+
+```bash
+# Use your fine-tuned abstractive model (HF repo or local path)
+python main.py --audio rapat.wav --abstractive-model "myuser/mt5-finetuned-summary" --summarization-method abstractive
+```
+
+Notes:
+- Use `--summarization-method abstractive` to force the pipeline to use the abstractive summarizer (fine-tuned models like mT5/MBart/etc.).
+- The `--abstractive-model` flag accepts HF repo ids or local model directories (where transformers' `from_pretrained` works).
+- If you want to test the model locally first, try:
+
+```python
+from transformers import pipeline
+pipeline("summarization", model="myuser/mt5-finetuned-summary")
+```
+
+# Extractive override
+You can also override the sentence-transformers model used for extractive summarization (useful when you have a fine-tuned sentence embedding model):
+
+```bash
+# Override sentence-transformer used for extractive summarization
+python main.py --audio rapat.wav --sentence-embedding-model "myuser/sentence-transformer-finetuned"
+```
+
+Compatibility note:
+- The pipeline validates WhisperX model compatibility at runtime and will raise a helpful error if you attempt to use a non-CTranslate2 (CT2) model directory or a HF hub checkpoint with `--asr-backend whisperx`. If you see this error, either convert your model to CT2, or switch to `--asr-backend whisper` to use HF checkpoints directly.
+
 ### Streamlit Web Interface
 
 ```bash

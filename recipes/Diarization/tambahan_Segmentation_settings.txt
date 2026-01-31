@@ -1,0 +1,24 @@
+ # Segmentation settings
+    segment_window: float = 3.0
+    segment_hop: float = 1.5
+
+    # Clustering settings
+    clustering_method: str = "spectral"
+    clustering_threshold: float = 0.8
+    min_cluster_size: int = 1
+    max_speakers: Optional[int] = None
+
+
+
+
+    # Preferred language for whisper (use 'id' for Indonesian)
+    language: str = None
+
+
+    # Light abstractive refinement step (run on condensed extractive overview)
+    do_abstractive_refinement: bool = False
+    abstractive_refine_max_len: int = 180
+
+    # Generate a comprehensive executive overview (long, covering entire meeting)
+    comprehensive_overview: bool = True
+    comprehensive_max_length: int = 512
