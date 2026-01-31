@@ -206,6 +206,7 @@ python main.py --audio rapat.wav --asr-backend whisperx --asr-model "path/to/ctr
 ```
 
 Notes:
+
 - WhisperX requires a CTranslate2-converted model (contains `model.bin`). If you supply a HF Transformers checkpoint to WhisperX it may be rejected; prefer passing a CT2 model dir or use the `whisper`/`transformers` backends for HF repos.
 - If you use `--preset deployment`, the pipeline may override incompatible ASR model ids to the recommended WhisperX model. To force use of your model, pass `--asr-model` explicitly and avoid `--preset deployment`.
 - To avoid language switching artifacts, set `--asr-language en` for English audio.
@@ -218,6 +219,7 @@ python main.py --audio rapat.wav --abstractive-model "myuser/mt5-finetuned-summa
 ```
 
 Notes:
+
 - Use `--summarization-method abstractive` to force the pipeline to use the abstractive summarizer (fine-tuned models like mT5/MBart/etc.).
 - The `--abstractive-model` flag accepts HF repo ids or local model directories (where transformers' `from_pretrained` works).
 - If you want to test the model locally first, try:
@@ -228,6 +230,7 @@ pipeline("summarization", model="myuser/mt5-finetuned-summary")
 ```
 
 # Extractive override
+
 You can also override the sentence-transformers model used for extractive summarization (useful when you have a fine-tuned sentence embedding model):
 
 ```bash
@@ -236,6 +239,7 @@ python main.py --audio rapat.wav --sentence-embedding-model "myuser/sentence-tra
 ```
 
 Compatibility note:
+
 - The pipeline validates WhisperX model compatibility at runtime and will raise a helpful error if you attempt to use a non-CTranslate2 (CT2) model directory or a HF hub checkpoint with `--asr-backend whisperx`. If you see this error, either convert your model to CT2, or switch to `--asr-backend whisper` to use HF checkpoints directly.
 
 ### Streamlit Web Interface
@@ -454,7 +458,7 @@ python main.py --audio rapat.wav \
 
 Catatan penting:
 
-- Dependensi: perhitungan ROUGE/BERTScore menggunakan paket `evaluate` (yang memerlukan `rouge_score`, `absl-py`, dan `bert-score`). Jika paket ini tidak tersedia, evaluasi ringkasan akan *gracefully fall back* (akan melaporkan metrik kosong) — evaluasi WER/DER tetap berjalan.
+- Dependensi: perhitungan ROUGE/BERTScore menggunakan paket `evaluate` (yang memerlukan `rouge_score`, `absl-py`, dan `bert-score`). Jika paket ini tidak tersedia, evaluasi ringkasan akan _gracefully fall back_ (akan melaporkan metrik kosong) — evaluasi WER/DER tetap berjalan.
 - Normalisasi teks: ROUGE sensitif terhadap tokenisasi/normalisasi. Jika Anda mendapatkan nilai ROUGE = 0.0, kemungkinan besar ada mismatch normalisasi antara referensi dan sistem (huruf kapital, tanda baca, atau tokenisasi berbeda). Solusi:
   - Pastikan referensi dan hasil ringkasan dalam **lowercase** dan bebas dari karakter khusus yang tidak perlu.
   - Gunakan util `scripts/evaluate_whisper.py` `normalize_text()` sebagai contoh fungsi normalisasi.
