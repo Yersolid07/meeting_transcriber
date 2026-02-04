@@ -1,0 +1,8 @@
+%% Deployment Diagram
+flowchart LR
+    user[User] --> device[Client Device]
+    device --> app[CLI/Streamlit App]
+    app --> cpu[CPU/GPU]
+    app --> storage[(Local Storage)]
+    app --> models[(Model Cache)]
+    storage --> outputs[Output Docs]

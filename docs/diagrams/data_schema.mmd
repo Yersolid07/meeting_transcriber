@@ -1,0 +1,28 @@
+%% Data Schema (ER-like)
+classDiagram
+    class ManifestEntry {
+        +audio_filepath: str
+        +text: str
+        +duration: float
+    }
+    class TranscriptSegment {
+        +speaker_id: str
+        +start: float
+        +end: float
+        +text: str
+    }
+    class MeetingSummary {
+        +overview: str
+        +key_points: List[str]
+        +decisions: List[str]
+        +action_items: List[Dict]
+    }
+    class EvaluationResult {
+        +wer: float
+        +der: float
+        +cer: float
+    }
+
+    ManifestEntry --> TranscriptSegment : produces
+    TranscriptSegment --> MeetingSummary : summarized into
+    TranscriptSegment --> EvaluationResult : evaluated by

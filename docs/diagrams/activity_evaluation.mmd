@@ -1,0 +1,10 @@
+%% Activity Diagram - Evaluation
+flowchart TD
+    start([Mulai Evaluasi]) --> load[Load Reference & Hypothesis]
+    load --> prep[Preprocess Text]
+    prep --> wer[Hitung WER/CER]
+    prep --> der[Hitung DER]
+    wer --> merge[Gabungkan Hasil]
+    der --> merge
+    merge --> report[Generate Report & CSV]
+    report --> end([Selesai])

@@ -1,0 +1,36 @@
+%% Class Diagram
+classDiagram
+    class MeetingTranscriberPipeline {
+        +process(audio_path, title, ...)
+        +config: PipelineConfig
+    }
+    class AudioProcessor {
+        +load_audio(path)
+        +get_duration(waveform, sr)
+    }
+    class SpeakerDiarizer {
+        +process(waveform, sr)
+        +_load_embedding_model()
+    }
+    class ASRTranscriber {
+        +transcribe_segments(waveform, segments)
+        +_load_model()
+    }
+    class BERTSummarizer {
+        +summarize(transcript)
+        +extract_key_points()
+    }
+    class DocumentGenerator {
+        +generate(summary, transcript)
+    }
+    class Evaluator {
+        +calculate_wer(ref, hyp)
+        +calculate_der(ref, hyp)
+    }
+
+    MeetingTranscriberPipeline --> AudioProcessor
+    MeetingTranscriberPipeline --> SpeakerDiarizer
+    MeetingTranscriberPipeline --> ASRTranscriber
+    MeetingTranscriberPipeline --> BERTSummarizer
+    MeetingTranscriberPipeline --> DocumentGenerator
+    MeetingTranscriberPipeline --> Evaluator

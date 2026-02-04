@@ -1,0 +1,38 @@
+%% Component Diagram
+flowchart TB
+    subgraph Presentation
+        cli[CLI main.py]
+        ui[Streamlit UI]
+    end
+    subgraph Core
+        pipeline[MeetingTranscriberPipeline]
+        audio[AudioProcessor]
+        diar[SpeakerDiarizer]
+        asr[ASRTranscriber]
+        summ[BERTSummarizer]
+        doc[DocumentGenerator]
+        eval[Evaluator]
+    end
+    subgraph Data
+        cfg[config.yaml / Config Loader]
+        data[(Data: audio, manifests, ground truth)]
+        models[(Models cache)]
+        output[(Output docs/results)]
+    end
+
+    cli --> pipeline
+    ui --> pipeline
+    pipeline --> audio
+    pipeline --> diar
+    pipeline --> asr
+    pipeline --> summ
+    pipeline --> doc
+    pipeline --> eval
+
+    audio --> data
+    diar --> models
+    asr --> models
+    summ --> models
+    doc --> output
+    eval --> output
+    cfg --> pipeline
