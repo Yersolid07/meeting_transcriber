@@ -1,0 +1,11 @@
+%% Pipeline Flow Diagram
+flowchart LR
+    A[Audio Input] --> B[Audio Preprocessing]
+    B --> C[VAD]
+    C --> D[Segmentation]
+    D --> E[Speaker Embedding]
+    E --> F[Clustering]
+    F --> G[ASR per Segment]
+    G --> H[Summarization]
+    H --> I[Document Generation]
+    I --> J[Notulensi (.docx)]

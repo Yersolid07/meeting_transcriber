@@ -1,0 +1,25 @@
+%% Sequence Diagram - Transcription
+sequenceDiagram
+    participant U as User
+    participant CLI as CLI/Streamlit
+    participant P as Pipeline
+    participant AP as AudioProcessor
+    participant D as SpeakerDiarizer
+    participant A as ASRTranscriber
+    participant S as Summarizer
+    participant G as DocumentGenerator
+
+    U->>CLI: Submit audio + metadata
+    CLI->>P: process(audio_path, metadata)
+    P->>AP: load_audio()
+    AP-->>P: waveform, sr
+    P->>D: diarize(waveform)
+    D-->>P: speaker_segments
+    P->>A: transcribe_segments(waveform, segments)
+    A-->>P: transcript_segments
+    P->>S: summarize(transcript)
+    S-->>P: meeting_summary
+    P->>G: generate_doc(summary, transcript)
+    G-->>P: doc_path
+    P-->>CLI: result metadata
+    CLI-->>U: download doc

@@ -1,0 +1,16 @@
+%% System Context Diagram
+flowchart TB
+    user([Pengguna/Notulis]) -->|Unggah Audio| ui[CLI/Streamlit UI]
+    ui --> pipeline[Pipeline Meeting Transcriber]
+    pipeline --> asr[ASR Engine]
+    pipeline --> diar[Speaker Diarization]
+    pipeline --> summ[Summarization]
+    pipeline --> doc[Document Generator]
+    asr --> models[(Model ASR)]
+    diar --> models
+    summ --> models
+    doc --> storage[(Penyimpanan Output)]
+    storage --> user
+    subgraph External
+        models[(Model Cache/HuggingFace)]
+    end
